@@ -1,0 +1,117 @@
+{
+  "schema_version": 1,
+  "generated_at": "2026-04-03T23:40:30+00:00",
+  "source_package": "libexif",
+  "source_file": "/home/yans/code/safelibs/ported/libexif/all_cves.json",
+  "analysis_scope": {
+    "total_cves_reviewed": 27,
+    "included_cves": 7,
+    "excluded_cves": 20,
+    "selection_rule": "Included CVEs whose primary failure mode is parser logic, arithmetic exceptions, arithmetic-induced aborts, or resource exhaustion rather than memory corruption. Excluded CVEs centered on buffer overflows, out-of-bounds access, uninitialized memory, use-after-free, or other memory-safety failures that safe Rust can usually eliminate.",
+    "rust_assumption": "This analysis assumes a primarily safe-Rust reimplementation with narrow, audited unsafe and FFI boundaries. Under that assumption, parser logic, divide-by-zero, recursion, and resource-exhaustion bugs remain relevant even when classic memory corruption bugs do not."
+  },
+  "relevant_cves": [
+    {
+      "cve_id": "CVE-2007-6351",
+      "published": "2007-12-20T02:46:00",
+      "priority": "low",
+      "weaknesses": [
+        "NVD-CWE-Other"
+      ],
+      "category": "infinite recursion / stack exhaustion",
+      "affected_area": "Recursive EXIF tag parsing, possibly via exif_loader_write",
+      "primary_impact": "denial of service",
+      "reason_not_classed_as_memory_corruption": "The CVE describes crafted EXIF tags causing infinite recursion rather than out-of-bounds memory access.",
+      "why_relevant_to_rust": "Safe Rust does not prevent unbounded recursion or parser non-termination. A Rust port still needs recursion-depth or cycle detection when traversing nested EXIF structures.",
+      "recommended_guard": "Track nesting depth or visited offsets and reject cycles or excessive recursion."
+    },
+    {
+      "cve_id": "CVE-2012-2837",
+      "published": "2012-07-13T00:00:00",
+      "priority": "low",
+      "weaknesses": [
+        "CWE-189"
+      ],
+      "category": "divide by zero",
+      "affected_area": "Olympus MakerNote formatting in mnote_olympus_entry_get_value",
+      "primary_impact": "denial of service",
+      "reason_not_classed_as_memory_corruption": "The reported failure is a divide-by-zero exception during formatting, not memory corruption.",
+      "why_relevant_to_rust": "Rust will still panic on division by zero. A Rust port can still crash or return incorrect results if zero denominators are not validated before division.",
+      "recommended_guard": "Validate divisors before arithmetic and convert malformed MakerNote values into parse errors."
+    },
+    {
+      "cve_id": "CVE-2018-20030",
+      "published": "2019-02-20T17:29:00",
+      "priority": "low",
+      "weaknesses": [
+        "CWE-400"
+      ],
+      "category": "algorithmic complexity / CPU exhaustion",
+      "affected_area": "Processing of EXIF_IFD_INTEROPERABILITY and EXIF_IFD_EXIF tags",
+      "primary_impact": "denial of service",
+      "reason_not_classed_as_memory_corruption": "The issue is CPU resource exhaustion while processing tags, not unsafe memory access.",
+      "why_relevant_to_rust": "Rust memory safety does not constrain parser work factors. A Rust port can still be vulnerable to adversarial inputs that trigger excessive traversal or repeated work.",
+      "recommended_guard": "Impose hard limits on nesting, offsets followed, and total parse work for cross-linked or adversarial tag structures."
+    },
+    {
+      "cve_id": "CVE-2020-0181",
+      "published": "2020-06-11T15:15:00",
+      "priority": "medium",
+      "weaknesses": [
+        "CWE-190"
+      ],
+      "category": "integer overflow leading to denial of service",
+      "affected_area": "Thumbnail parsing arithmetic in exif_data_load_data_thumbnail",
+      "primary_impact": "denial of service",
+      "reason_not_classed_as_memory_corruption": "The description calls out denial of service from integer overflow, without describing a resulting buffer overflow or out-of-bounds access.",
+      "why_relevant_to_rust": "A Rust port still has to treat length and offset arithmetic as untrusted. Overflow can become a panic in checked builds, a wrapped value in unchecked arithmetic, or a logic bug that rejects or misparses valid data.",
+      "recommended_guard": "Use checked_add, checked_mul, and checked_sub for all size and offset math and return structured parse errors on overflow."
+    },
+    {
+      "cve_id": "CVE-2020-0198",
+      "published": "2020-06-09T00:00:00",
+      "priority": "medium",
+      "weaknesses": [
+        "CWE-190"
+      ],
+      "category": "integer overflow causing abort",
+      "affected_area": "Content parsing arithmetic in exif_data_load_data_content",
+      "primary_impact": "denial of service",
+      "reason_not_classed_as_memory_corruption": "The description identifies an integer-overflow-triggered UBSAN abort rather than a memory overwrite or over-read.",
+      "why_relevant_to_rust": "Rust does not automatically turn all parser arithmetic into recoverable errors. If the port uses panicking arithmetic or unchecked wrapping, malformed EXIF data can still crash the process or destabilize parsing.",
+      "recommended_guard": "Perform explicit checked arithmetic and propagate an error instead of relying on panics or sanitizer catches."
+    },
+    {
+      "cve_id": "CVE-2020-12767",
+      "published": "2020-05-09T21:15:00",
+      "priority": "medium",
+      "weaknesses": [
+        "CWE-369"
+      ],
+      "category": "divide by zero",
+      "affected_area": "Value formatting in exif_entry_get_value",
+      "primary_impact": "denial of service",
+      "reason_not_classed_as_memory_corruption": "The failure mode is an arithmetic exception, not memory corruption.",
+      "why_relevant_to_rust": "A Rust rewrite still needs to validate EXIF numeric fields before division. Without explicit checks, malformed data can still trigger panics or incorrect formatting behavior.",
+      "recommended_guard": "Reject zero denominators and other invalid numeric encodings before formatting or ratio conversion."
+    },
+    {
+      "cve_id": "CVE-2020-13114",
+      "published": "2020-05-21T16:15:00",
+      "priority": "low",
+      "weaknesses": [
+        "CWE-770"
+      ],
+      "category": "unrestricted resource consumption",
+      "affected_area": "Canon MakerNote size handling",
+      "primary_impact": "denial of service",
+      "reason_not_classed_as_memory_corruption": "The CVE reports unrestricted size leading to excessive compute time, not memory corruption.",
+      "why_relevant_to_rust": "Rust memory safety does not impose budget limits on loops, allocations, or decoding work. A Rust port can still spend unbounded time processing attacker-controlled MakerNote sizes unless it enforces limits.",
+      "recommended_guard": "Cap MakerNote sizes, iteration counts, and derived work units before decoding nested vendor-specific structures."
+    }
+  ],
+  "excluded_summary": {
+    "count": 20,
+    "reason": "The remaining CVEs in all_cves.json are primarily memory-safety issues such as buffer overflows, out-of-bounds reads or writes, use of uninitialized memory, or underflow or overflow chains that culminate in memory corruption. Those bugs are important for auditing unsafe Rust and FFI boundaries but are not the main parser-logic risks that automatically survive a safe-Rust port."
+  }
+}
