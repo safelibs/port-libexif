@@ -21,8 +21,8 @@
  * Boston, MA  02110-1301  USA.
  */
 
-#include <libexif/exif-utils.h>
 #include <libexif/exif-data.h>
+#include "test-public-api.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -74,37 +74,43 @@ const uint16_t test_tags [] = {
  */
 static int check_entry_format(ExifEntry *e)
 {
-	if(e->tag > EXIF_TAG_GPS_H_POSITIONING_ERROR) {
-		/* unknown tags should get EXIF_FORMAT_UNDEFINED, no size and no data */
-		if(e->format != EXIF_FORMAT_UNDEFINED || e->size || e->components || e->data) {
-		    fprintf(stderr, "check_entry_format: Unknown tag not handled correctly (tag=%x)\n", e->tag);
+	TestEntryInfo info;
+
+	if (test_entry_info_from_dump(e, &info)) {
+		fprintf(stderr, "check_entry_format: Could not read entry via public API dump\n");
+		return 1;
+	}
+	if (info.tag > EXIF_TAG_GPS_H_POSITIONING_ERROR) {
+		/* Unknown tags should get EXIF_FORMAT_UNDEFINED and no payload. */
+		if (info.format != EXIF_FORMAT_UNDEFINED || info.size || info.components) {
+		    fprintf(stderr, "check_entry_format: Unknown tag not handled correctly (tag=%x)\n", info.tag);
 		    return 1;
 		}
 		return 0;
 	}
-	switch(e->format) {
+	switch(info.format) {
 	case EXIF_FORMAT_UNDEFINED:
 	case EXIF_FORMAT_ASCII:
 		/* entries with ASCII or UNDEFINED format do not necessarily need to have the component count set.
 		   only check here is, if component count is set, the size should match the count */
-		if(e->size != e->components) {
-			fprintf (stderr, "check_entry_format: Entry has bad component count or size (tag=%x)\n", e->tag);
+		if(info.size != info.components) {
+			fprintf (stderr, "check_entry_format: Entry has bad component count or size (tag=%x)\n", info.tag);
 			return 1;
 		}
 		break;
 		
 	default:
 		/* All other formats should have a nonzero component count. */
-		if(!e->components) {
-			fprintf (stderr, "check_entry_format: Entry should have component count set (tag=%x)\n", e->tag);
+		if(!info.components) {
+			fprintf (stderr, "check_entry_format: Entry should have component count set (tag=%x)\n", info.tag);
 			return 1;
 		}
 		return 0;	
 	}
 
 	/* If a value is present the size should be set to the right value */	
-	if(e->data && e->size != e->components * exif_format_get_size(e->format)) {
-		fprintf (stderr, "check_entry_format: Entry has bad size (tag=%x)\n", e->tag);
+	if(info.size && info.size != info.components * exif_format_get_size((ExifFormat)info.format)) {
+		fprintf (stderr, "check_entry_format: Entry has bad size (tag=%x)\n", info.tag);
 		return 1;	
 	}
 	return 0;
@@ -116,10 +122,16 @@ main ()
 	size_t i;
 	ExifData *data = NULL;
 	ExifEntry *e = NULL;
+	ExifContent *gps_content;
 
 	data = exif_data_new ();
 	if (!data) {
 		fprintf (stderr, "Error running exif_data_new()\n");
+		goto ERROR_EXIT;
+	}
+	gps_content = test_find_ifd_content(data, EXIF_IFD_GPS);
+	if (!gps_content) {
+		fprintf (stderr, "Error finding GPS IFD\n");
 		goto ERROR_EXIT;
 	}
 
@@ -130,11 +142,12 @@ main ()
 			fprintf (stderr, "Error running exif_entry_new()\n");
 			goto ERROR_EXIT;
 		}		
-		exif_content_add_entry(data->ifd[EXIF_IFD_GPS], e);
+		exif_content_add_entry(gps_content, e);
 		exif_entry_initialize (e, (ExifTag)test_tags[i]);
 		if(check_entry_format(e)) goto ERROR_EXIT;
-		exif_content_remove_entry (data->ifd[EXIF_IFD_GPS], e);
+		exif_content_remove_entry (gps_content, e);
 		exif_entry_unref (e);
+		e = NULL;
 	}
 	exif_data_unref(data);
 	return 0;
@@ -143,4 +156,3 @@ ERROR_EXIT:
 	exif_data_unref (data);
 	exit(EXIT_FAILURE);
 }
-

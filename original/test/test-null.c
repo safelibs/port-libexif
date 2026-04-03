@@ -24,6 +24,7 @@
 #include "libexif/exif-entry.h"
 #include "libexif/exif-loader.h"
 #include "libexif/exif-mnote-data.h"
+#include "test-public-api.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -265,7 +266,12 @@ static void entry_null_test(void)
 	}
 	/* Create the mandatory EXIF fields so we have something to work with */
 	exif_data_fix(d);
-	e = exif_content_get_entry (d->ifd[EXIF_IFD_0], EXIF_TAG_X_RESOLUTION);
+	e = test_find_entry_in_ifd(d, EXIF_IFD_0, EXIF_TAG_X_RESOLUTION);
+	if (!e) {
+		fprintf(stderr, "Unexpected failure in %s\n", "test_find_entry_in_ifd");
+		exif_data_unref(d);
+		exit(13);
+	}
 
 	(void) exif_entry_get_value(e, NULL, 0);
 	(void) exif_entry_get_value(e, NULL, 123);
