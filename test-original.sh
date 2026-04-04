@@ -1738,7 +1738,8 @@ test_imagemagick() {
 
   if ! (
     cd "$srcdir"
-    DEB_BUILD_OPTIONS='nocheck noautodbgsym' dpkg-buildpackage -us -uc -b >"$dir/imagemagick-build.log" 2>&1
+    # Noble's debugedit can choke on newer DWARF emitted in transitive inputs.
+    DEB_BUILD_OPTIONS='nocheck noautodbgsym nostrip' dpkg-buildpackage -us -uc -b >"$dir/imagemagick-build.log" 2>&1
   ); then
     cat "$dir/imagemagick-build.log" >&2
     exit 1
