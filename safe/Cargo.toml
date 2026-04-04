@@ -1,0 +1,13 @@
+[package]
+name = "libexif-safe"
+version = "0.6.24"
+edition = "2021"
+publish = false
+build = "build.rs"
+
+[lib]
+name = "exif"
+crate-type = ["rlib", "cdylib", "staticlib"]
+
+[build-dependencies]
+cc = "1.2"
