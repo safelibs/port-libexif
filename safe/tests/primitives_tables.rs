@@ -97,6 +97,31 @@ fn unknown_data_option_returns_null() {
 }
 
 #[test]
+fn log_mem_nulls() {
+    assert!(unsafe { exif_mem_new(None, None, None) }.is_null());
+    assert!(unsafe { exif_mem_alloc(std::ptr::null_mut(), 8) }.is_null());
+    assert!(unsafe { exif_mem_realloc(std::ptr::null_mut(), std::ptr::null_mut(), 8) }.is_null());
+    unsafe {
+        exif_mem_free(std::ptr::null_mut(), std::ptr::null_mut());
+        exif_mem_ref(std::ptr::null_mut());
+        exif_mem_unref(std::ptr::null_mut());
+    }
+
+    assert!(unsafe { exif_log_new_mem(std::ptr::null_mut()) }.is_null());
+    assert!(unsafe { exif_log_code_get_title(EXIF_LOG_CODE_NONE) }.is_null());
+    assert!(unsafe { exif_log_code_get_message(EXIF_LOG_CODE_NONE) }.is_null());
+    unsafe {
+        exif_log_ref(std::ptr::null_mut());
+        exif_log_unref(std::ptr::null_mut());
+        exif_log_free(std::ptr::null_mut());
+        exif_log_set_func(std::ptr::null_mut(), None, std::ptr::null_mut());
+    }
+
+    assert!(unsafe { exif_data_option_get_name(0) }.is_null());
+    assert!(unsafe { exif_data_option_get_description(0) }.is_null());
+}
+
+#[test]
 fn exif_mem_preserves_allocator_and_refcount_semantics() {
     reset_allocators();
 

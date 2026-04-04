@@ -21,11 +21,18 @@ if [[ $# -eq 0 ]]; then
     done < <(find "$script_dir/original-c" -maxdepth 1 -name '*.c' -print0 | sort -z)
 else
     for source in "$@"; do
-        if [[ -f "$source" ]]; then
-            sources+=("$source")
-        else
-            sources+=("$script_dir/original-c/$source")
+        candidate="$source"
+        if [[ ! -f "$candidate" ]]; then
+            candidate="$script_dir/original-c/$source"
         fi
+        if [[ ! -f "$candidate" && "$candidate" != *.c ]]; then
+            candidate="${candidate}.c"
+        fi
+        if [[ ! -f "$candidate" ]]; then
+            echo "unknown C test: $source" >&2
+            exit 1
+        fi
+        sources+=("$candidate")
     done
 fi
 
