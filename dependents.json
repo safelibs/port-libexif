@@ -1,0 +1,340 @@
+{
+  "schema_version": 1,
+  "generated_on": "2026-04-03",
+  "ubuntu_release": "24.04 LTS (noble)",
+  "library": "libexif",
+  "metadata_source": "Local apt-cache binary and source metadata from the Ubuntu 24.04 repositories configured on this system.",
+  "selection_policy": "Representative direct dependents on libexif12 and/or source packages that Build-Depend on libexif-dev. This list is intentionally diverse rather than exhaustive.",
+  "notes": [
+    "Runtime-functionality summaries are based on package descriptions when those descriptions are explicit, and otherwise on conservative inference from the package's role plus its direct libexif dependency.",
+    "A compile-time-only entry is included when the Ubuntu source package Build-Depends on libexif-dev but the main packaged runtime binaries do not directly depend on libexif12."
+  ],
+  "dependents": [
+    {
+      "name": "exif",
+      "source_package": "exif",
+      "category": "command-line metadata tool",
+      "dependency_paths": [
+        {
+          "kind": "runtime",
+          "binary_package": "exif",
+          "libexif_package": "libexif12"
+        },
+        {
+          "kind": "compile-time",
+          "source_package": "exif",
+          "libexif_package": "libexif-dev"
+        }
+      ],
+      "runtime_functionality": "Shows EXIF information embedded in JPEG files from the command line.",
+      "evidence": [
+        "Ubuntu package metadata shows exif Depends on libexif12 and the exif source package Build-Depends on libexif-dev.",
+        "The package description explicitly says exif is a command-line utility to show EXIF information hidden in JPEG files."
+      ]
+    },
+    {
+      "name": "exiftran",
+      "source_package": "fbi",
+      "category": "JPEG transformation tool",
+      "dependency_paths": [
+        {
+          "kind": "runtime",
+          "binary_package": "exiftran",
+          "libexif_package": "libexif12"
+        },
+        {
+          "kind": "compile-time",
+          "source_package": "fbi",
+          "libexif_package": "libexif-dev"
+        }
+      ],
+      "runtime_functionality": "Performs lossless JPEG rotation using the EXIF orientation tag and updates EXIF dimensions, orientation, and thumbnails.",
+      "evidence": [
+        "Ubuntu package metadata shows exiftran Depends on libexif12 and the fbi source package Build-Depends on libexif-dev.",
+        "The package description explicitly says exiftran rotates images automatically by checking the EXIF orientation tag and updates EXIF information and thumbnails."
+      ]
+    },
+    {
+      "name": "eog-plugin-exif-display",
+      "source_package": "eog-plugins",
+      "category": "GNOME image-viewer plugin",
+      "dependency_paths": [
+        {
+          "kind": "runtime",
+          "binary_package": "eog-plugin-exif-display",
+          "libexif_package": "libexif12"
+        },
+        {
+          "kind": "compile-time",
+          "source_package": "eog-plugins",
+          "libexif_package": "libexif-dev"
+        }
+      ],
+      "runtime_functionality": "Displays EXIF-derived camera data and a histogram inside GNOME Image Viewer.",
+      "evidence": [
+        "Ubuntu package metadata shows eog-plugin-exif-display Depends on libexif12 and the eog-plugins source package Build-Depends on libexif-dev.",
+        "The package description explicitly says the plugin displays a histogram and other camera data from EXIF."
+      ]
+    },
+    {
+      "name": "eog-plugin-map",
+      "source_package": "eog-plugins",
+      "category": "GNOME image-viewer plugin",
+      "dependency_paths": [
+        {
+          "kind": "runtime",
+          "binary_package": "eog-plugin-map",
+          "libexif_package": "libexif12"
+        },
+        {
+          "kind": "compile-time",
+          "source_package": "eog-plugins",
+          "libexif_package": "libexif-dev"
+        }
+      ],
+      "runtime_functionality": "Shows the image's location on a map using EXIF GPS metadata.",
+      "evidence": [
+        "Ubuntu package metadata shows eog-plugin-map Depends on libexif12 and the eog-plugins source package Build-Depends on libexif-dev.",
+        "The package description explicitly says the plugin provides a map to show the image's location data."
+      ]
+    },
+    {
+      "name": "tracker-extract",
+      "source_package": "tracker-miners",
+      "category": "desktop metadata indexer",
+      "dependency_paths": [
+        {
+          "kind": "runtime",
+          "binary_package": "tracker-extract",
+          "libexif_package": "libexif12"
+        },
+        {
+          "kind": "compile-time",
+          "source_package": "tracker-miners",
+          "libexif_package": "libexif-dev"
+        }
+      ],
+      "runtime_functionality": "Extracts EXIF metadata from image files during desktop indexing so photo metadata becomes searchable.",
+      "evidence": [
+        "Ubuntu package metadata shows tracker-extract Depends on libexif12 and the tracker-miners source package Build-Depends on libexif-dev.",
+        "The package description identifies tracker-extract as the metadata-extractor component of Tracker; the EXIF-specific role is a conservative inference from that role plus its direct libexif dependency."
+      ]
+    },
+    {
+      "name": "Shotwell",
+      "source_package": "shotwell",
+      "category": "photo organizer",
+      "dependency_paths": [
+        {
+          "kind": "runtime",
+          "binary_package": "shotwell",
+          "libexif_package": "libexif12"
+        },
+        {
+          "kind": "compile-time",
+          "source_package": "shotwell",
+          "libexif_package": "libexif-dev"
+        }
+      ],
+      "runtime_functionality": "Imports and manages photos using EXIF-backed metadata such as capture properties and orientation information.",
+      "evidence": [
+        "Ubuntu package metadata shows shotwell Depends on libexif12 and the shotwell source package Build-Depends on libexif-dev.",
+        "The package description identifies Shotwell as a digital photo organizer that imports images from disk or camera and supports operations such as rotation and tagging; the EXIF-specific role is a conservative inference from that photo-management role plus its direct libexif dependency."
+      ]
+    },
+    {
+      "name": "FoxtrotGPS",
+      "source_package": "foxtrotgps",
+      "category": "mapping and GPS application",
+      "dependency_paths": [
+        {
+          "kind": "runtime",
+          "binary_package": "foxtrotgps",
+          "libexif_package": "libexif12"
+        },
+        {
+          "kind": "compile-time",
+          "source_package": "foxtrotgps",
+          "libexif_package": "libexif-dev"
+        }
+      ],
+      "runtime_functionality": "Reads photo metadata for the application's geocoding-photos feature.",
+      "evidence": [
+        "Ubuntu package metadata shows foxtrotgps Depends on libexif12 and the foxtrotgps source package Build-Depends on libexif-dev.",
+        "The package description explicitly lists geocoding photos as a supported feature."
+      ]
+    },
+    {
+      "name": "gphoto2",
+      "source_package": "gphoto2",
+      "category": "digital camera CLI",
+      "dependency_paths": [
+        {
+          "kind": "runtime",
+          "binary_package": "gphoto2",
+          "libexif_package": "libexif12"
+        },
+        {
+          "kind": "compile-time",
+          "source_package": "gphoto2",
+          "libexif_package": "libexif-dev"
+        }
+      ],
+      "runtime_functionality": "Works with digital camera images from the command line, including EXIF-aware handling of downloaded camera photos.",
+      "evidence": [
+        "Ubuntu package metadata shows gphoto2 Depends on libexif12 and the gphoto2 source package Build-Depends on libexif-dev.",
+        "The package description identifies gphoto2 as a digital camera command-line client; the EXIF-specific role is a conservative inference from that role plus its direct libexif dependency."
+      ]
+    },
+    {
+      "name": "GTKam",
+      "source_package": "gtkam",
+      "category": "digital camera GUI",
+      "dependency_paths": [
+        {
+          "kind": "runtime",
+          "binary_package": "gtkam",
+          "libexif_package": "libexif12"
+        },
+        {
+          "kind": "compile-time",
+          "source_package": "gtkam",
+          "libexif_package": "libexif-dev"
+        }
+      ],
+      "runtime_functionality": "Transfers photos and movies from digital cameras and uses libexif-backed GTK widgets for camera-photo EXIF display or editing in the GUI.",
+      "evidence": [
+        "Ubuntu package metadata shows gtkam Depends on libexif12 and libexif-gtk5, and the gtkam source package Build-Depends on libexif-dev and libexif-gtk-dev.",
+        "The package description identifies GTKam as a GTK application for retrieving media from digital cameras."
+      ]
+    },
+    {
+      "name": "MiniDLNA",
+      "source_package": "minidlna",
+      "category": "DLNA media server",
+      "dependency_paths": [
+        {
+          "kind": "runtime",
+          "binary_package": "minidlna",
+          "libexif_package": "libexif12"
+        },
+        {
+          "kind": "compile-time",
+          "source_package": "minidlna",
+          "libexif_package": "libexif-dev"
+        }
+      ],
+      "runtime_functionality": "Indexes shared picture collections for DLNA clients using JPEG EXIF metadata during photo scanning.",
+      "evidence": [
+        "Ubuntu package metadata shows minidlna Depends on libexif12 and the minidlna source package Build-Depends on libexif-dev.",
+        "The package description says MiniDLNA serves pictures to DLNA clients; the EXIF-specific indexing role is a conservative inference from that role plus its direct libexif dependency."
+      ]
+    },
+    {
+      "name": "Gerbera",
+      "source_package": "gerbera",
+      "category": "UPnP media server",
+      "dependency_paths": [
+        {
+          "kind": "runtime",
+          "binary_package": "gerbera",
+          "libexif_package": "libexif12"
+        },
+        {
+          "kind": "compile-time",
+          "source_package": "gerbera",
+          "libexif_package": "libexif-dev"
+        }
+      ],
+      "runtime_functionality": "Processes photo media for UPnP/DLNA serving, using EXIF metadata when indexing JPEG images.",
+      "evidence": [
+        "Ubuntu package metadata shows gerbera Depends on libexif12 and the gerbera source package Build-Depends on libexif-dev.",
+        "The package description says Gerbera streams digital media over UPnP; the EXIF-specific photo-metadata role is a conservative inference from that role plus its direct libexif dependency."
+      ]
+    },
+    {
+      "name": "ruby-exif",
+      "source_package": "ruby-exif",
+      "category": "Ruby library",
+      "dependency_paths": [
+        {
+          "kind": "runtime",
+          "binary_package": "ruby-exif",
+          "libexif_package": "libexif12"
+        },
+        {
+          "kind": "compile-time",
+          "source_package": "ruby-exif",
+          "libexif_package": "libexif-dev"
+        }
+      ],
+      "runtime_functionality": "Parses, edits, and saves EXIF data from Ruby code.",
+      "evidence": [
+        "Ubuntu package metadata shows ruby-exif Depends on libexif12 and the ruby-exif source package Build-Depends on libexif-dev.",
+        "The package description explicitly says ruby-exif is a Ruby library for parsing, editing, and saving EXIF data."
+      ]
+    },
+    {
+      "name": "libexif-gtk3",
+      "source_package": "libexif-gtk",
+      "category": "GTK widget library",
+      "dependency_paths": [
+        {
+          "kind": "runtime",
+          "binary_package": "libexif-gtk3-5",
+          "libexif_package": "libexif12"
+        },
+        {
+          "kind": "compile-time",
+          "source_package": "libexif-gtk",
+          "libexif_package": "libexif-dev"
+        }
+      ],
+      "runtime_functionality": "Provides GTK 3 widgets that applications use to display and edit EXIF tags.",
+      "evidence": [
+        "Ubuntu package metadata shows libexif-gtk3-5 Depends on libexif12 and the libexif-gtk source package Build-Depends on libexif-dev.",
+        "The package description explicitly says this library provides GTK+ 3.0 widgets to display and edit EXIF tags."
+      ]
+    },
+    {
+      "name": "CamlImages",
+      "source_package": "camlimages",
+      "category": "OCaml image-processing library",
+      "dependency_paths": [
+        {
+          "kind": "runtime",
+          "binary_package": "libcamlimages-ocaml",
+          "libexif_package": "libexif12"
+        },
+        {
+          "kind": "compile-time",
+          "source_package": "camlimages",
+          "libexif_package": "libexif-dev"
+        }
+      ],
+      "runtime_functionality": "Provides OCaml image-processing code with EXIF-capable image handling in the library runtime.",
+      "evidence": [
+        "Ubuntu package metadata shows libcamlimages-ocaml Depends on libexif12 and the camlimages source package Build-Depends on libexif-dev.",
+        "The package description identifies CamlImages as an OCaml image-processing library that loads and saves multiple image formats; the EXIF-specific role is a conservative inference from that role plus its direct libexif dependency."
+      ]
+    },
+    {
+      "name": "ImageMagick",
+      "source_package": "imagemagick",
+      "category": "image manipulation suite",
+      "dependency_paths": [
+        {
+          "kind": "compile-time",
+          "source_package": "imagemagick",
+          "libexif_package": "libexif-dev"
+        }
+      ],
+      "runtime_functionality": null,
+      "notes": "Ubuntu's imagemagick source package Build-Depends on libexif-dev, but the main noble runtime libraries and binaries do not directly depend on libexif12 in package metadata.",
+      "evidence": [
+        "Ubuntu source metadata shows imagemagick Build-Depends on libexif-dev.",
+        "Ubuntu binary package metadata for imagemagick and libmagickcore-6.q16-7t64 does not list a direct dependency on libexif12, so this is recorded as a compile-time dependency only."
+      ]
+    }
+  ]
+}
