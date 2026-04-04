@@ -835,8 +835,41 @@ EOF
 
 test_imagemagick() {
   local dir="$1"
+  local srcdir
+  local identify_bin
 
-  identify -verbose "$GENERATED_FIXTURE" >"$dir/imagemagick.out"
+  apt-get update >"$dir/imagemagick-apt-update.log" 2>&1
+  apt-get build-dep -y --no-install-recommends imagemagick >"$dir/imagemagick-builddep.log" 2>&1 || {
+    cat "$dir/imagemagick-builddep.log" >&2
+    exit 1
+  }
+  (
+    cd "$dir"
+    apt-get source imagemagick >"$dir/imagemagick-source.log" 2>&1
+  ) || {
+    cat "$dir/imagemagick-source.log" >&2
+    exit 1
+  }
+
+  srcdir="$(find "$dir" -maxdepth 1 -mindepth 1 -type d -name 'imagemagick-*' | LC_ALL=C sort | head -n1)"
+  [[ -n "$srcdir" ]] || die "failed to unpack imagemagick source package"
+
+  if ! (
+    cd "$srcdir"
+    DEB_BUILD_OPTIONS='nocheck noautodbgsym' dpkg-buildpackage -us -uc -b >"$dir/imagemagick-build.log" 2>&1
+  ); then
+    cat "$dir/imagemagick-build.log" >&2
+    exit 1
+  fi
+
+  find "$dir" -maxdepth 1 -type f -name '*.deb' | LC_ALL=C sort >"$dir/imagemagick-debs.out"
+  require_contains "$dir/imagemagick-debs.out" 'imagemagick_'
+  require_contains "$dir/imagemagick-debs.out" 'imagemagick-6.q16_'
+
+  identify_bin="$(find "$srcdir" -type f -path '*/utilities/identify' | LC_ALL=C sort | head -n1)"
+  [[ -x "$identify_bin" ]] || die "failed to locate freshly built ImageMagick identify binary"
+
+  "$identify_bin" -verbose "$GENERATED_FIXTURE" >"$dir/imagemagick.out"
   require_contains "$dir/imagemagick.out" 'Orientation: RightTop'
 }
 
