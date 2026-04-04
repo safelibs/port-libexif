@@ -2,6 +2,7 @@ pub mod ffi;
 
 mod i18n;
 mod object;
+mod parser;
 mod primitives;
 mod runtime;
 mod tables;
@@ -38,17 +39,6 @@ fn store_mut_data(buffer: *mut *mut c_uchar, size: *mut c_uint) {
     }
 }
 
-fn store_const_data(buffer: *mut *const c_uchar, size: *mut c_uint) {
-    unsafe {
-        if !buffer.is_null() {
-            *buffer = ptr::null();
-        }
-        if !size.is_null() {
-            *size = 0;
-        }
-    }
-}
-
 macro_rules! stub_void {
     ($(fn $name:ident($($arg:ident : $ty:ty),*);)+) => {
         $(
@@ -74,30 +64,6 @@ macro_rules! stub_return {
             }
         )+
     };
-}
-
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn exif_data_save_data(
-    data: *mut ExifData,
-    buffer: *mut *mut c_uchar,
-    size: *mut c_uint,
-) {
-    panic_boundary::call_void(|| {
-        let _ = data;
-        store_mut_data(buffer, size);
-    });
-}
-
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn exif_loader_get_buf(
-    loader: *mut ExifLoader,
-    buffer: *mut *const c_uchar,
-    size: *mut c_uint,
-) {
-    panic_boundary::call_void(|| {
-        let _ = loader;
-        store_const_data(buffer, size);
-    });
 }
 
 #[unsafe(no_mangle)]
@@ -167,12 +133,6 @@ pub unsafe extern "C" fn mnote_pentax_entry_get_value(
 }
 
 stub_void! {
-    fn exif_data_load_data(data: *mut ExifData, source: *const c_uchar, size: c_uint);
-    fn exif_loader_log(loader: *mut ExifLoader, log: *mut ExifLog);
-    fn exif_loader_ref(loader: *mut ExifLoader);
-    fn exif_loader_reset(loader: *mut ExifLoader);
-    fn exif_loader_unref(loader: *mut ExifLoader);
-    fn exif_loader_write_file(loader: *mut ExifLoader, path: *const c_char);
     fn exif_mnote_data_construct(note: *mut ExifMnoteData, mem: *mut ExifMem);
     fn exif_mnote_data_load(note: *mut ExifMnoteData, buffer: *const c_uchar, size: c_uint);
     fn exif_mnote_data_log(note: *mut ExifMnoteData, log: *mut ExifLog);
@@ -183,11 +143,6 @@ stub_void! {
 }
 
 stub_return! {
-    fn exif_data_new_from_file(path: *const c_char) -> *mut ExifData = ptr::null_mut();
-    fn exif_loader_get_data(loader: *mut ExifLoader) -> *mut ExifData = ptr::null_mut();
-    fn exif_loader_new() -> *mut ExifLoader = ptr::null_mut();
-    fn exif_loader_new_mem(mem: *mut ExifMem) -> *mut ExifLoader = ptr::null_mut();
-    fn exif_loader_write(loader: *mut ExifLoader, buffer: *mut c_uchar, size: c_uint) -> c_uchar = 0;
     fn exif_mnote_data_canon_new(mem: *mut ExifMem, option: ExifDataOption) -> *mut ExifMnoteData = ptr::null_mut();
     fn exif_mnote_data_count(note: *mut ExifMnoteData) -> c_uint = 0;
     fn exif_mnote_data_get_description(note: *mut ExifMnoteData, index: c_uint) -> *const c_char = ptr::null();

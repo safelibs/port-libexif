@@ -49,6 +49,71 @@ unsafe fn data_mem(data: *mut ExifData) -> *mut ExifMem {
     }
 }
 
+pub(crate) unsafe fn exif_data_get_mem_impl(data: *mut ExifData) -> *mut ExifMem {
+    unsafe { data_mem(data) }
+}
+
+pub(crate) unsafe fn exif_data_get_options_impl(data: *mut ExifData) -> ExifDataOption {
+    if data.is_null() || unsafe { (*data).priv_ }.is_null() {
+        0
+    } else {
+        unsafe { (*data_private(data)).options }
+    }
+}
+
+pub(crate) unsafe fn exif_data_set_mnote_offset_impl(data: *mut ExifData, offset: c_uint) {
+    if data.is_null() || unsafe { (*data).priv_ }.is_null() {
+        return;
+    }
+
+    unsafe {
+        (*data_private(data)).offset_mnote = offset;
+    }
+}
+
+pub(crate) unsafe fn exif_data_reset_impl(data: *mut ExifData) {
+    if data.is_null() || unsafe { (*data).priv_ }.is_null() {
+        return;
+    }
+
+    for ifd in 0..EXIF_IFD_COUNT as usize {
+        let content = unsafe { (*data).ifd[ifd] };
+        if content.is_null() {
+            continue;
+        }
+
+        while unsafe { (*content).count } > 0 {
+            let entries = unsafe { (*content).entries };
+            if entries.is_null() {
+                unsafe {
+                    (*content).count = 0;
+                }
+                break;
+            }
+
+            let last = unsafe { *entries.add((*content).count as usize - 1) };
+            unsafe { exif_content_remove_entry_impl(content, last) };
+        }
+    }
+
+    if !unsafe { (*data).data }.is_null() {
+        unsafe {
+            exif_mem_free_impl(data_mem(data), (*data).data.cast());
+            (*data).data = ptr::null_mut();
+            (*data).size = 0;
+        }
+    }
+
+    let private = unsafe { data_private(data) };
+    unsafe {
+        if !(*private).md.is_null() {
+            crate::exif_mnote_data_unref((*private).md);
+            (*private).md = ptr::null_mut();
+        }
+        (*private).offset_mnote = 0;
+    }
+}
+
 pub(crate) unsafe fn exif_data_get_log_impl(data: *mut ExifData) -> *mut ExifLog {
     if data.is_null() || unsafe { (*data).priv_ }.is_null() {
         ptr::null_mut()
@@ -152,7 +217,7 @@ pub(crate) unsafe fn exif_data_new_from_data_impl(
 ) -> *mut ExifData {
     let data = unsafe { exif_data_new_impl() };
     if !data.is_null() {
-        unsafe { crate::exif_data_load_data(data, source, size) };
+        unsafe { crate::parser::data_load::exif_data_load_data_impl(data, source, size) };
     }
     data
 }

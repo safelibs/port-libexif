@@ -7,12 +7,17 @@ target_dir=${CARGO_TARGET_DIR:-"$crate_dir/target"}
 profile=${PROFILE:-debug}
 deps_dir="$target_dir/$profile/deps"
 compiler=${CC:-cc}
+soname_link="$deps_dir/libexif.so.12"
 
 export LC_ALL=C
 export LANG=
 export LANGUAGE=
 
 cargo build --manifest-path "$crate_dir/Cargo.toml" --lib >/dev/null
+
+if [[ -f "$deps_dir/libexif.so" ]]; then
+    ln -sf "libexif.so" "$soname_link"
+fi
 
 sources=()
 if [[ $# -eq 0 ]]; then
