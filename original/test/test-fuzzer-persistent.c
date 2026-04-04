@@ -56,6 +56,8 @@ void content_foreach_func(ExifEntry *entry, void *UNUSED(callback_data))
 	/* ensure \0 */
 	buf[sizeof(buf)-1] = 0;
 	buf[sizeof(buf)-2] = 0;
+	exif_tag_get_name(entry->tag);
+	exif_format_get_name(entry->format);
 	exif_entry_get_value(entry, buf, sizeof(buf)-1);
 	if (buf[sizeof(buf)-2] != 0) abort();
 }

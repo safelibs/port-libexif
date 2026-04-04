@@ -22,7 +22,6 @@
 
 #include "libexif/exif-data.h"
 #include "libexif/exif-system.h"
-#include "test-public-api.h"
 
 #include <string.h>
 #include <stdio.h>
@@ -37,21 +36,17 @@ static unsigned entry_count;
 /** Callback function handling an ExifEntry. */
 static void content_foreach_func(ExifEntry *entry, void *UNUSED(callback_data))
 {
-  TestEntryInfo info;
-
-  if (test_entry_info_from_dump(entry, &info)) {
-    fprintf(stderr, "Could not read entry via public API dump.\n");
-    exit(1);
-  }
+  char buf[2000];
+  exif_entry_get_value(entry, buf, sizeof(buf));
   printf("    Entry %u: %s (%s)\n"
 	 "      Size, Comps: %d, %d\n"
 	 "      Value: %s\n", 
 	 entry_count,
-	 info.tag_name,
-	 info.format_name,
-	 info.size,
-	 (int)(info.components),
-	 info.value);
+	 exif_tag_get_name(entry->tag),
+	 exif_format_get_name(entry->format),
+	 entry->size,
+	 (int)(entry->components),
+	 exif_entry_get_value(entry, buf, sizeof(buf)));
   ++entry_count;
 }
 

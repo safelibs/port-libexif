@@ -22,6 +22,7 @@
  * Boston, MA  02110-1301  USA.
  */
 
+#include <libexif/exif-utils.h>
 #include <libexif/exif-data.h>
 #include "test-public-api.h"
 
@@ -88,12 +89,12 @@ ExifTag rational_test_tags[] = {
  * exif_entry_get_value().  If uniform is zero, then only check that the
  * resulting string fits within the buffer and don't check its content.
  */
-static void check_entry_trunc(ExifEntry *e, ExifTag tag, int uniform)
+static void check_entry_trunc(ExifEntry *e, int uniform)
 {
 	unsigned int i;
 	char v[1024], full[1024];  /* Large enough to never truncate output */
 
-	printf ("Tag 0x%x\n", (int) tag);
+	printf ("Tag 0x%x\n", (int) e->tag);
 
 	/* Get the full, untruncated string to use as the expected value */
 	exif_entry_get_value (e, full, sizeof(full));
@@ -119,7 +120,18 @@ main ()
 	ExifData *data;
 	ExifEntry *e;
 	ExifContent *ifd0;
+	ExifContent *gps;
+	ExifContent *interop;
+	ExifMem *mem;
 	unsigned i;
+	static const ExifSRational r = {1., 20.};  /* a nonzero number */
+	static const char user_comment[] = "ASCII\0\0\0A Long User Comment";
+	static const char xp_comment[] = "U\0C\0S\0-\0002\0 \0C\0o\0m\0m\0e\0n\0t\0";
+	static const char interop_buf[] = "R98";
+	static const char subsec[] = "130 ";
+	static const ExifRational gpsh = {12., 1.};
+	static const ExifRational gpsm = {34., 1.};
+	static const ExifRational gpss = {56780., 1000.};
 
 	data = exif_data_new ();
 	if (!data) {
@@ -129,6 +141,18 @@ main ()
 	ifd0 = test_find_ifd_content(data, EXIF_IFD_0);
 	if (!ifd0) {
 		fprintf (stderr, "Error finding IFD 0\n");
+		exit(13);
+	}
+	gps = test_find_ifd_content(data, EXIF_IFD_GPS);
+	if (!gps) {
+		fprintf (stderr, "Error finding GPS IFD\n");
+		exif_data_unref (data);
+		exit(13);
+	}
+	interop = test_find_ifd_content(data, EXIF_IFD_INTEROPERABILITY);
+	if (!interop) {
+		fprintf (stderr, "Error finding interoperability IFD\n");
+		exif_data_unref (data);
 		exit(13);
 	}
 
@@ -141,7 +165,7 @@ main ()
 		}
 		exif_content_add_entry (ifd0, e);
 		exif_entry_initialize (e, trunc_test_tags[i]);
-		check_entry_trunc(e, trunc_test_tags[i], 1);
+		check_entry_trunc(e, 1);
 		exif_content_remove_entry (ifd0, e);
 		exif_entry_unref (e);
 	}
@@ -156,7 +180,7 @@ main ()
 		}
 		exif_content_add_entry (ifd0, e);
 		exif_entry_initialize (e, nonuniform_test_tags[i]);
-		check_entry_trunc(e, nonuniform_test_tags[i], 0);
+		check_entry_trunc(e, 0);
 		exif_content_remove_entry (ifd0, e);
 		exif_entry_unref (e);
 	}
@@ -171,10 +195,253 @@ main ()
 		}
 		exif_content_add_entry (ifd0, e);
 		exif_entry_initialize (e, rational_test_tags[i]);
-		check_entry_trunc(e, rational_test_tags[i], 1);
+		exif_set_srational (e->data, exif_data_get_byte_order (data), r);
+		/* In case this tag needs an unsigned rational instead,
+		 * fix the type automatically */
+		exif_entry_fix (e);
+		check_entry_trunc(e, 1);
 		exif_content_remove_entry (ifd0, e);
 		exif_entry_unref (e);
 	}
+
+	/* Create a memory allocator to manage the remaining ExifEntry structs */
+	mem = exif_mem_new_default();
+	if (!mem) {
+		fprintf (stderr, "Out of memory\n");
+		exif_data_unref (data);
+		exit(13);
+	}
+
+	/* EXIF_TAG_SUB_SEC_TIME initialization/truncation tests */
+	e = exif_entry_new_mem (mem);
+	if (!e) {
+		fprintf (stderr, "Out of memory\n");
+		exif_mem_unref (mem);
+		exif_data_unref (data);
+		exit(13);
+	}
+	exif_content_add_entry (ifd0, e);
+	exif_entry_initialize (e, EXIF_TAG_SUB_SEC_TIME);
+	e->size = sizeof(subsec);  /* include NUL */
+	e->components = e->size;
+	e->data = exif_mem_alloc(mem, e->size);
+	if (!e->data) {
+		fprintf (stderr, "Out of memory\n");
+		exif_entry_unref (e);
+		exif_mem_unref (mem);
+		exif_data_unref (data);
+		exit(13);
+	}
+	memcpy(e->data, subsec, e->size);
+	check_entry_trunc(e, 1);
+	exif_content_remove_entry (ifd0, e);
+	exif_entry_unref (e);
+
+	/* EXIF_TAG_USER_COMMENT initialization/truncation tests */
+	e = exif_entry_new_mem (mem);
+	if (!e) {
+		fprintf (stderr, "Out of memory\n");
+		exif_mem_unref (mem);
+		exif_data_unref (data);
+		exit(13);
+	}
+	exif_content_add_entry (ifd0, e);
+	exif_entry_initialize (e, EXIF_TAG_USER_COMMENT);
+	e->size = sizeof(user_comment) - 1;
+	e->components = e->size;
+	e->data = exif_mem_alloc(mem, e->size);
+	if (!e->data) {
+		fprintf (stderr, "Out of memory\n");
+		exif_entry_unref (e);
+		exif_mem_unref (mem);
+		exif_data_unref (data);
+		exit(13);
+	}
+	memcpy(e->data, user_comment, e->size);
+	check_entry_trunc(e, 1);
+	exif_content_remove_entry (ifd0, e);
+	exif_entry_unref (e);
+
+	/* EXIF_TAG_XP_COMMENT truncation tests */
+	e = exif_entry_new_mem (mem);
+	if (!e) {
+		fprintf (stderr, "Out of memory\n");
+		exif_mem_unref (mem);
+		exif_data_unref (data);
+		exit(13);
+	}
+	exif_content_add_entry (ifd0, e);
+	exif_entry_initialize (e, EXIF_TAG_XP_COMMENT);
+	e->format = EXIF_FORMAT_BYTE;
+	e->size = sizeof(xp_comment) - 1;
+	e->components = e->size;
+	e->data = exif_mem_alloc(mem, e->size);
+	if (!e->data) {
+		fprintf (stderr, "Out of memory\n");
+		exif_entry_unref (e);
+		exif_mem_unref (mem);
+		exif_data_unref (data);
+		exit(13);
+	}
+	memcpy(e->data, xp_comment, e->size);
+	check_entry_trunc(e, 1);
+	exif_content_remove_entry (ifd0, e);
+	exif_entry_unref (e);
+
+	/* EXIF_TAG_INTEROPERABILITY_VERSION truncation tests */
+	e = exif_entry_new_mem (mem);
+	if (!e) {
+		fprintf (stderr, "Out of memory\n");
+		exif_mem_unref (mem);
+		exif_data_unref (data);
+		exit(13);
+	}
+	exif_content_add_entry (interop, e);
+	exif_entry_initialize (e, EXIF_TAG_INTEROPERABILITY_VERSION);
+	e->format = EXIF_FORMAT_UNDEFINED;  /* The spec says ASCII, but libexif
+					       allows UNDEFINED */
+	e->size = sizeof(interop_buf);  /* include NUL */
+	e->components = e->size;
+	e->data = exif_mem_alloc(mem, e->size);
+	if (!e->data) {
+		fprintf (stderr, "Out of memory\n");
+		exif_entry_unref (e);
+		exif_mem_unref (mem);
+		exif_data_unref (data);
+		exit(13);
+	}
+	memcpy(e->data, interop_buf, e->size);
+	check_entry_trunc(e, 1);
+	exif_content_remove_entry (interop, e);
+	exif_entry_unref (e);
+
+	/* EXIF_TAG_GPS_VERSION_ID truncation tests */
+	e = exif_entry_new_mem (mem);
+	if (!e) {
+		fprintf (stderr, "Out of memory\n");
+		exif_mem_unref (mem);
+		exif_data_unref (data);
+		exit(13);
+	}
+	exif_content_add_entry (gps, e);
+	exif_entry_initialize (e, EXIF_TAG_GPS_VERSION_ID);
+	e->format = EXIF_FORMAT_BYTE;
+	e->size = 4;
+	e->components = e->size;
+	e->data = exif_mem_alloc(mem, e->size);
+	if (!e->data) {
+		fprintf (stderr, "Out of memory\n");
+		exif_entry_unref (e);
+		exif_mem_unref (mem);
+		exif_data_unref (data);
+		exit(13);
+	}
+	e->data[0] = 2;
+	e->data[1] = 2;
+	e->data[2] = 0;
+	e->data[3] = 0;
+	check_entry_trunc(e, 1);
+	exif_content_remove_entry (gps, e);
+	exif_entry_unref (e);
+
+	/* EXIF_TAG_GPS_ALTITUDE_REF truncation tests */
+	e = exif_entry_new_mem (mem);
+	if (!e) {
+		fprintf (stderr, "Out of memory\n");
+		exif_mem_unref (mem);
+		exif_data_unref (data);
+		exit(13);
+	}
+	exif_content_add_entry (gps, e);
+	exif_entry_initialize (e, EXIF_TAG_GPS_ALTITUDE_REF);
+	e->format = EXIF_FORMAT_BYTE;
+	e->size = 1;
+	e->components = e->size;
+	e->data = exif_mem_alloc(mem, e->size);
+	if (!e->data) {
+		fprintf (stderr, "Out of memory\n");
+		exif_entry_unref (e);
+		exif_mem_unref (mem);
+		exif_data_unref (data);
+		exit(13);
+	}
+	e->data[0] = 1;
+	check_entry_trunc(e, 1);
+	exif_content_remove_entry (gps, e);
+	exif_entry_unref (e);
+
+	/* EXIF_TAG_GPS_TIME_STAMP truncation tests */
+	e = exif_entry_new_mem (mem);
+	if (!e) {
+		fprintf (stderr, "Out of memory\n");
+		exif_mem_unref (mem);
+		exif_data_unref (data);
+		exit(13);
+	}
+	exif_content_add_entry (gps, e);
+	exif_entry_initialize (e, EXIF_TAG_GPS_TIME_STAMP);
+	e->format = EXIF_FORMAT_RATIONAL;
+	e->components = 3;
+	e->size = e->components * exif_format_get_size(EXIF_FORMAT_RATIONAL);
+	e->data = exif_mem_alloc(mem, e->size);
+	if (!e->data) {
+		fprintf (stderr, "Out of memory\n");
+		exif_entry_unref (e);
+		exif_mem_unref (mem);
+		exif_data_unref (data);
+		exit(13);
+	}
+	exif_set_rational(e->data, exif_data_get_byte_order (data), gpsh);
+	exif_set_rational(e->data+8, exif_data_get_byte_order (data), gpsm);
+	exif_set_rational(e->data+16, exif_data_get_byte_order (data), gpss);
+	check_entry_trunc(e, 1);
+	exif_content_remove_entry (gps, e);
+	exif_entry_unref (e);
+
+	/* EXIF_TAG_SUBJECT_AREA truncation tests */
+	e = exif_entry_new_mem (mem);
+	if (!e) {
+		fprintf (stderr, "Out of memory\n");
+		exif_mem_unref (mem);
+		exif_data_unref (data);
+		exit(13);
+	}
+	exif_content_add_entry (ifd0, e);
+	exif_entry_initialize (e, EXIF_TAG_SUBJECT_AREA);
+	e->format = EXIF_FORMAT_SHORT;
+	/* This tags is interpreted differently depending on # components */
+	/* Rectangle */
+	e->components = 4;
+	e->size = e->components * exif_format_get_size(EXIF_FORMAT_SHORT);
+	e->data = exif_mem_alloc(mem, e->size);
+	if (!e->data) {
+		fprintf (stderr, "Out of memory\n");
+		exif_entry_unref (e);
+		exif_mem_unref (mem);
+		exif_data_unref (data);
+		exit(13);
+	}
+	exif_set_short(e->data, exif_data_get_byte_order (data), 123);
+	exif_set_short(e->data+2, exif_data_get_byte_order (data), 456);
+	exif_set_short(e->data+4, exif_data_get_byte_order (data), 78);
+	exif_set_short(e->data+6, exif_data_get_byte_order (data), 90);
+	check_entry_trunc(e, 1);
+	/* Circle */
+	e->components = 3;
+	e->size = e->components * exif_format_get_size(EXIF_FORMAT_SHORT);
+	check_entry_trunc(e, 1);
+	/* Centre */
+	e->components = 2;
+	e->size = e->components * exif_format_get_size(EXIF_FORMAT_SHORT);
+	check_entry_trunc(e, 1);
+	/* Invalid */
+	e->components = 1;
+	e->size = e->components * exif_format_get_size(EXIF_FORMAT_SHORT);
+	check_entry_trunc(e, 1);
+	exif_content_remove_entry (ifd0, e);
+	exif_entry_unref (e);
+
+	exif_mem_unref(mem);
 	exif_data_unref (data);
 
 	return 0;
