@@ -67,6 +67,7 @@ RUN sed -i 's/^Types: deb$/Types: deb deb-src/' /etc/apt/sources.list.d/ubuntu.s
       exif \
       exiftran \
       eog \
+      eog-dev \
       eog-plugins \
       file \
       foxtrotgps \
@@ -78,16 +79,19 @@ RUN sed -i 's/^Types: deb$/Types: deb deb-src/' /etc/apt/sources.list.d/ubuntu.s
       libcamlimages-ocaml-dev \
       libexif-gtk-dev \
       libexif-gtk3-5 \
+      libgphoto2-dev \
       libgtk-3-dev \
       minidlna \
       ocaml-findlib \
       ocaml-nox \
       pkg-config \
+      python3-dogtail \
       ruby \
       ruby-exif \
       shotwell \
       sqlite3 \
       tracker-extract \
+      xdotool \
       xauth \
       xvfb \
       gerbera \
@@ -542,27 +546,372 @@ create_test_fixtures() {
   require_nonempty_file "$GPHOTO_FIXTURE_DIR/fuji.jpg"
 }
 
-run_eog_plugin_smoke() {
-  local plugin_name="$1"
-  local image_path="$2"
+build_eog_exif_display_probe() {
+  local output_path="$1"
+
+  cat >"$output_path" <<'EOF'
+#include <gtk/gtk.h>
+#include <eog/eog-exif-util.h>
+#include <libexif/exif-data.h>
+#include <libexif/exif-tag.h>
+
+#include <string.h>
+
+static gchar *
+make_valid_utf8 (const gchar *str)
+{
+	GString *string = NULL;
+	const char *remainder = str;
+	const char *invalid;
+	int remaining_bytes = strlen (str);
+	int valid_bytes;
+
+	while (remaining_bytes != 0) {
+		if (g_utf8_validate (remainder, remaining_bytes, &invalid))
+			break;
+
+		valid_bytes = invalid - remainder;
+		if (string == NULL)
+			string = g_string_sized_new (remaining_bytes);
+
+		g_string_append_len (string, remainder, valid_bytes);
+		g_string_append_c (string, '?');
+		remaining_bytes -= valid_bytes + 1;
+		remainder = invalid + 1;
+	}
+
+	if (string == NULL)
+		return g_strdup (str);
+
+	g_string_append (string, remainder);
+	g_string_append (string, " (invalid Unicode)");
+	return g_string_free (string, FALSE);
+}
+
+static void
+plugin_set_label (GtkWidget *widget,
+		  ExifData *exif_data,
+		  gint tag_id)
+{
+	gchar exif_buffer[512];
+	const gchar *buf_ptr = NULL;
+	gchar *label_text = NULL;
+
+	if (exif_data) {
+		buf_ptr = eog_exif_data_get_value (exif_data, tag_id,
+						 exif_buffer,
+						 sizeof (exif_buffer));
+		if (tag_id == EXIF_TAG_DATE_TIME_ORIGINAL && buf_ptr)
+			label_text = eog_exif_util_format_date (buf_ptr);
+		else if (buf_ptr)
+			label_text = make_valid_utf8 (buf_ptr);
+	}
+
+	gtk_label_set_text (GTK_LABEL (widget), label_text);
+	g_free (label_text);
+}
+
+int
+main (int argc, char **argv)
+{
+	ExifData *exif_data;
+	GtkWidget *model_label;
+	GtkWidget *date_label;
+
+	if (argc != 2)
+		return 2;
+
+	gtk_init (&argc, &argv);
+	exif_data = exif_data_new_from_file (argv[1]);
+	if (!exif_data)
+		return 1;
+
+	model_label = gtk_label_new (NULL);
+	date_label = gtk_label_new (NULL);
+	plugin_set_label (model_label, exif_data, EXIF_TAG_MODEL);
+	plugin_set_label (date_label, exif_data, EXIF_TAG_DATE_TIME_ORIGINAL);
+
+	g_print ("MODEL=%s\n", gtk_label_get_text (GTK_LABEL (model_label)));
+	g_print ("DATE=%s\n", gtk_label_get_text (GTK_LABEL (date_label)));
+
+	exif_data_unref (exif_data);
+	return 0;
+}
+EOF
+}
+
+build_foxtrotgps_exif_probe() {
+  local output_path="$1"
+
+  cat >"$output_path" <<'EOF'
+#include <ctype.h>
+#include <glib.h>
+#include <libexif/exif-data.h>
+#include <libexif/exif-tag.h>
+
+#include <stdio.h>
+#include <string.h>
+
+static void
+trim_spaces (char *buf)
+{
+	int i;
+
+	for (i = (int) strlen (buf) - 1; i > 0; i--) {
+		if (isspace ((unsigned char) buf[i]))
+			continue;
+		break;
+	}
+	buf[++i] = '\0';
+}
+
+static char *
+show_tag (ExifData *data, ExifIfd ifd, ExifTag tag)
+{
+	char buf[1024] = {0};
+	ExifEntry *entry = exif_content_get_entry (data->ifd[ifd], tag);
+
+	if (entry) {
+		exif_entry_get_value (entry, buf, sizeof (buf));
+		trim_spaces (buf);
+		if (*buf)
+			printf ("%s: %s\n", exif_tag_get_name_in_ifd (tag, ifd), buf);
+	}
+
+	return g_strdup (buf);
+}
+
+int
+main (int argc, char **argv)
+{
+	ExifData *data;
+	char *date;
+	char *lat_ref;
+	char *latitude;
+
+	if (argc != 2)
+		return 2;
+
+	data = exif_data_new_from_file (argv[1]);
+	if (!data)
+		return 1;
+
+	date = show_tag (data, EXIF_IFD_0, EXIF_TAG_DATE_TIME);
+	lat_ref = show_tag (data, EXIF_IFD_GPS, EXIF_TAG_GPS_LATITUDE_REF);
+	latitude = show_tag (data, EXIF_IFD_GPS, EXIF_TAG_GPS_LATITUDE);
+
+	printf ("DATE_COPY=%s\n", date);
+	printf ("LATREF_COPY=%s\n", lat_ref);
+	printf ("LAT_COPY=%s\n", latitude);
+
+	g_free (date);
+	g_free (lat_ref);
+	g_free (latitude);
+	exif_data_unref (data);
+	return 0;
+}
+EOF
+}
+
+build_gtkam_exif_probe() {
+  local output_path="$1"
+
+  cat >"$output_path" <<'EOF'
+#include <gtk/gtk.h>
+#include <gphoto2/gphoto2-abilities-list.h>
+#include <gphoto2/gphoto2-camera.h>
+#include <gphoto2/gphoto2-context.h>
+#include <gphoto2/gphoto2-file.h>
+#include <gphoto2/gphoto2-port-info-list.h>
+#include <libexif/exif-data.h>
+#include <libexif-gtk/gtk-exif-browser.h>
+
+#include <stdio.h>
+
+static GtkWidget *views[8];
+static int nviews = 0;
+
+static void
+collect_views (GtkWidget *widget)
+{
+	if (GTK_IS_TREE_VIEW (widget) && nviews < 8)
+		views[nviews++] = widget;
+
+	if (GTK_IS_CONTAINER (widget)) {
+		GList *children = gtk_container_get_children (GTK_CONTAINER (widget));
+		for (GList *iter = children; iter; iter = iter->next)
+			collect_views (GTK_WIDGET (iter->data));
+		g_list_free (children);
+	}
+}
+
+static void
+dump_model (GtkTreeModel *model)
+{
+	GtkTreeIter iter;
+	gboolean valid = gtk_tree_model_get_iter_first (model, &iter);
+
+	while (valid) {
+		gchar *tag = NULL;
+		gchar *value = NULL;
+
+		gtk_tree_model_get (model, &iter, 0, &tag, 1, &value, -1);
+		if (tag && value)
+			printf ("ROW|%s|%s\n", tag, value);
+		g_free (tag);
+		g_free (value);
+		valid = gtk_tree_model_iter_next (model, &iter);
+	}
+}
+
+int
+main (int argc, char **argv)
+{
+	Camera *camera = NULL;
+	GPContext *context = gp_context_new ();
+	CameraAbilitiesList *abilities = NULL;
+	GPPortInfoList *ports = NULL;
+	CameraAbilities ability;
+	GPPortInfo port;
+	CameraFile *file = NULL;
+	const char *data = NULL;
+	unsigned long size = 0;
+	ExifData *exif_data;
+	int index;
+
+	if (argc != 3)
+		return 2;
+
+	gtk_init (&argc, &argv);
+	gp_camera_new (&camera);
+	gp_abilities_list_new (&abilities);
+	gp_abilities_list_load (abilities, context);
+	index = gp_abilities_list_lookup_model (abilities, "Directory Browse");
+	if (index < 0)
+		return 3;
+	gp_abilities_list_get_abilities (abilities, index, &ability);
+	gp_camera_set_abilities (camera, ability);
+
+	gp_port_info_list_new (&ports);
+	gp_port_info_list_load (ports);
+	index = gp_port_info_list_lookup_path (ports, argv[1]);
+	if (index < 0)
+		return 4;
+	gp_port_info_list_get_info (ports, index, &port);
+	gp_camera_set_port_info (camera, port);
+
+	if (gp_camera_init (camera, context) < 0)
+		return 5;
+	gp_file_new (&file);
+	if (gp_camera_file_get (camera, "/", argv[2], GP_FILE_TYPE_EXIF,
+				file, context) < 0)
+		return 6;
+	gp_file_get_data_and_size (file, &data, &size);
+	exif_data = exif_data_new_from_data ((const unsigned char *) data, size);
+	if (!exif_data)
+		return 7;
+
+	GtkWidget *browser = gtk_exif_browser_new ();
+	gtk_exif_browser_set_data (GTK_EXIF_BROWSER (browser), exif_data);
+	gtk_widget_show_all (browser);
+	while (gtk_events_pending ())
+		gtk_main_iteration ();
+	collect_views (browser);
+	for (int i = 0; i < nviews; i++)
+		dump_model (gtk_tree_view_get_model (GTK_TREE_VIEW (views[i])));
+
+	exif_data_unref (exif_data);
+	gp_file_unref (file);
+	gp_camera_exit (camera, context);
+	gp_camera_unref (camera);
+	gp_abilities_list_free (abilities);
+	gp_port_info_list_free (ports);
+	gp_context_unref (context);
+	return 0;
+}
+EOF
+}
+
+run_eog_map_probe() {
+  local image_path="$1"
+  local expected_sensitive="$2"
   local log_dir="$3"
 
-  cat >"$log_dir/run-eog-plugin.sh" <<EOF
-set -euo pipefail
-gsettings set org.gnome.eog.plugins active-plugins "['$plugin_name']"
-timeout 8 xvfb-run -a eog "$image_path" >"$log_dir/eog.stdout" 2>"$log_dir/eog.stderr" || status=\$?
-status=\${status:-0}
-printf '%s\n' "\$status" >"$log_dir/status"
-gsettings get org.gnome.eog.plugins active-plugins >"$log_dir/active.txt"
+  mkdir -p "$log_dir"
+
+  cat >"$log_dir/check-eog-map.py" <<'EOF'
+from dogtail.tree import root
+from dogtail.utils import doDelay
+
+
+def find_jump_node(node):
+    desc = getattr(node, "description", "") or ""
+    if "Jump to current image" in desc and "location" in desc:
+        return node
+    try:
+        children = node.children
+    except Exception:
+        return None
+    for child in children:
+        found = find_jump_node(child)
+        if found is not None:
+            return found
+    return None
+
+
+for _ in range(60):
+    try:
+        app = root.application("eog")
+        break
+    except Exception:
+        doDelay(1)
+else:
+    raise SystemExit("eog not found")
+
+for _ in range(8):
+    doDelay(1)
+
+node = find_jump_node(app)
+if node is None:
+    raise SystemExit("map jump control not found")
+
+print(f"sensitive={getattr(node, 'sensitive')}")
 EOF
 
-  if ! dbus-run-session -- bash "$log_dir/run-eog-plugin.sh" >"$log_dir/dbus.log" 2>&1; then
+  cat >"$log_dir/run-eog-map.sh" <<EOF
+set -euo pipefail
+export NO_AT_BRIDGE=0
+export GTK_MODULES=gail:atk-bridge
+gsettings set org.gnome.eog.plugins active-plugins "['map']"
+eog "$image_path" >"$log_dir/eog.stdout" 2>"$log_dir/eog.stderr" &
+app_pid=\$!
+window_name="$(basename "$image_path")"
+for _ in \$(seq 1 30); do
+  wid="\$(xdotool search --onlyvisible --name "\$window_name" 2>/dev/null | head -n1 || true)"
+  if [[ -n "\$wid" ]]; then
+    break
+  fi
+  sleep 1
+done
+if [[ -z "\${wid:-}" ]]; then
+  echo "failed to locate eog window for \$window_name" >&2
+  exit 1
+fi
+xdotool key --window "\$wid" F9
+sleep 3
+python3 "$log_dir/check-eog-map.py" >"$log_dir/map-state.out"
+gsettings get org.gnome.eog.plugins active-plugins >"$log_dir/active.txt"
+kill "\$app_pid" || true
+wait "\$app_pid" || true
+EOF
+
+  if ! timeout 30 xvfb-run -a dbus-run-session -- bash "$log_dir/run-eog-map.sh" >"$log_dir/dbus.log" 2>&1; then
     cat "$log_dir/dbus.log" >&2
     exit 1
   fi
 
-  assert_status_equals 124 "$(cat "$log_dir/status")" "eog with plugin $plugin_name"
-  require_contains "$log_dir/active.txt" "$plugin_name"
+  require_contains "$log_dir/active.txt" 'map'
+  require_contains "$log_dir/map-state.out" "sensitive=$expected_sensitive"
 }
 
 test_exif() {
@@ -592,9 +941,18 @@ test_exiftran() {
 
 test_eog_plugin_exif_display() {
   local dir="$1"
+  local probe_src="$dir/eog-exif-display-probe.c"
+  local probe_bin="$dir/eog-exif-display-probe"
 
   assert_binary_uses_active_libexif "$EOG_PLUGIN_DIR/libexif-display.so"
-  run_eog_plugin_smoke "exif-display" "$FUJI_FIXTURE" "$dir"
+  build_eog_exif_display_probe "$probe_src"
+  cc -o "$probe_bin" "$probe_src" \
+    $(pkg-config --cflags --libs gtk+-3.0 eog libexif) \
+    -Wl,-rpath,/usr/lib/$MULTIARCH/eog
+  assert_binary_uses_active_libexif "$probe_bin"
+  xvfb-run -a "$probe_bin" "$FUJI_FIXTURE" >"$dir/eog-exif-display.out"
+  require_contains "$dir/eog-exif-display.out" 'MODEL=FinePix Z33WP'
+  require_contains "$dir/eog-exif-display.out" 'DATE=Wed, 25 March 2009  03:27:25'
 }
 
 test_eog_plugin_map() {
@@ -606,15 +964,19 @@ test_eog_plugin_map() {
   require_contains "$dir/gps-exif.out" $'Latitude\t33, 26, 27.36'
   require_contains "$dir/gps-exif.out" $'East or West Longitude\tW'
   require_contains "$dir/gps-exif.out" $'GPS Date\t2024:01:02'
-  run_eog_plugin_smoke "map" "$GPS_FIXTURE" "$dir"
+  run_eog_map_probe "$GPS_FIXTURE" "True" "$dir/gps"
+  run_eog_map_probe "$GENERATED_FIXTURE" "False" "$dir/no-gps"
 }
 
 test_tracker_extract() {
   local dir="$1"
 
-  tracker3 extract "$GENERATED_FIXTURE" >"$dir/tracker.out" 2>"$dir/tracker.err"
-  require_contains "$dir/tracker.out" 'nfo:width 8'
-  require_contains "$dir/tracker.out" 'nfo:height 6'
+  tracker3 extract "$GPS_FIXTURE" >"$dir/tracker.out" 2>"$dir/tracker.err"
+  require_contains "$dir/tracker.out" 'slo:latitude "33.440933'
+  require_contains "$dir/tracker.out" 'slo:longitude "-112.07399'
+  require_contains "$dir/tracker.out" 'nfo:model "libexif-gps"'
+  require_contains "$dir/tracker.out" 'nie:contentCreated "2024-01-02T03:04:05+0000"'
+  require_contains "$dir/tracker.out" 'nfo:orientation nfo:orientation-top'
   require_not_contains "$dir/tracker.err" 'No metadata or extractor modules found'
 }
 
@@ -629,11 +991,17 @@ test_shotwell() {
 
 test_foxtrotgps() {
   local dir="$1"
-  local status=0
+  local probe_src="$dir/foxtrotgps-exif-probe.c"
+  local probe_bin="$dir/foxtrotgps-exif-probe"
 
   assert_binary_uses_active_libexif /usr/bin/foxtrotgps
-  xvfb-run -a timeout 5 foxtrotgps --lat 33.4484 --lon -112.0740 >"$dir/foxtrotgps.out" 2>"$dir/foxtrotgps.err" || status=$?
-  assert_status_equals 124 "${status:-0}" "foxtrotgps"
+  build_foxtrotgps_exif_probe "$probe_src"
+  cc -o "$probe_bin" "$probe_src" $(pkg-config --cflags --libs glib-2.0 libexif)
+  assert_binary_uses_active_libexif "$probe_bin"
+  "$probe_bin" "$GPS_FIXTURE" >"$dir/foxtrotgps.out"
+  require_contains "$dir/foxtrotgps.out" 'DATE_COPY=2024:01:02 03:04:05'
+  require_contains "$dir/foxtrotgps.out" 'LATREF_COPY=N'
+  require_contains "$dir/foxtrotgps.out" 'LAT_COPY=33, 26, 27.36'
 }
 
 test_gphoto2() {
@@ -649,11 +1017,16 @@ test_gphoto2() {
 
 test_gtkam() {
   local dir="$1"
-  local status=0
+  local probe_src="$dir/gtkam-exif-probe.c"
+  local probe_bin="$dir/gtkam-exif-probe"
 
   assert_binary_uses_active_libexif /usr/bin/gtkam
-  xvfb-run -a timeout 5 gtkam >"$dir/gtkam.out" 2>"$dir/gtkam.err" || status=$?
-  assert_status_equals 124 "${status:-0}" "gtkam"
+  build_gtkam_exif_probe "$probe_src"
+  cc -o "$probe_bin" "$probe_src" $(pkg-config --cflags --libs libexif-gtk libgphoto2)
+  assert_binary_uses_active_libexif "$probe_bin"
+  xvfb-run -a "$probe_bin" "disk:$GPHOTO_FIXTURE_DIR" "fuji.jpg" >"$dir/gtkam.out"
+  require_contains "$dir/gtkam.out" 'ROW|Model|FinePix Z33WP'
+  require_contains "$dir/gtkam.out" 'ROW|DateTimeOriginal|2009:03:25 03:27:25'
 }
 
 test_minidlna() {
@@ -666,7 +1039,7 @@ test_minidlna() {
   assert_binary_uses_active_libexif /usr/sbin/minidlnad
 
   mkdir -p "$media_dir" "$db_dir" "$log_dir"
-  cp "$GENERATED_FIXTURE" "$media_dir/photo.jpg"
+  cp "$GPS_FIXTURE" "$media_dir/photo.jpg"
   cat >"$dir/minidlna.conf" <<EOF
 media_dir=P,$media_dir
 friendly_name=libexif-test
@@ -680,8 +1053,8 @@ EOF
   timeout 15 minidlnad -d -R -f "$dir/minidlna.conf" >"$dir/minidlna.stdout" 2>"$dir/minidlna.stderr" || status=$?
   assert_status_equals 124 "${status:-0}" "minidlnad"
   require_nonempty_file "$db_dir/files.db"
-  sqlite3 "$db_dir/files.db" "select PATH || '|' || MIME from DETAILS where PATH like '%/photo.jpg';" >"$dir/minidlna-sqlite.out"
-  require_contains "$dir/minidlna-sqlite.out" 'photo.jpg|image/jpeg'
+  sqlite3 "$db_dir/files.db" "select PATH || '|' || DATE || '|' || MIME from DETAILS where PATH like '%/photo.jpg';" >"$dir/minidlna-sqlite.out"
+  require_contains "$dir/minidlna-sqlite.out" 'photo.jpg|2024-01-02T03:04:05|image/jpeg'
 }
 
 test_gerbera() {
