@@ -546,288 +546,660 @@ create_test_fixtures() {
   require_nonempty_file "$GPHOTO_FIXTURE_DIR/fuji.jpg"
 }
 
-build_eog_exif_display_probe() {
+build_foxtrotgps_runtime_probe() {
   local output_path="$1"
 
   cat >"$output_path" <<'EOF'
+#define _GNU_SOURCE
+
+#include <dlfcn.h>
 #include <gtk/gtk.h>
-#include <eog/eog-exif-util.h>
-#include <libexif/exif-data.h>
-#include <libexif/exif-tag.h>
 
+#include <stdio.h>
+#include <stdlib.h>
+#include <stdarg.h>
 #include <string.h>
+#include <unistd.h>
 
-static gchar *
-make_valid_utf8 (const gchar *str)
+typedef struct _GladeXML GladeXML;
+
+extern GladeXML *gladexml;
+extern GtkWidget *dialog_image_data;
+extern GtkWidget *dialog_photo_correlate;
+extern GtkWidget *lookup_widget (GtkWidget *widget, const gchar *widget_name);
+extern void geo_photos_open_dialog_photo_correlate (void);
+extern void geo_photos_open_dialog_image_data (void);
+extern void geocode_set_photodir (char *photodir, GtkWidget *widget);
+
+static const char *expected_datetime = "2024:01:02 03:04:05";
+static const char *photo_dir;
+static int stage;
+static int ticks;
+
+static gboolean
+probe_cb (gpointer user_data)
 {
-	GString *string = NULL;
-	const char *remainder = str;
-	const char *invalid;
-	int remaining_bytes = strlen (str);
-	int valid_bytes;
+	GtkWidget *button;
+	GtkWidget *camera_label;
+	GtkWidget *gps_label;
+	const gchar *camera_text;
+	const gchar *gps_text;
 
-	while (remaining_bytes != 0) {
-		if (g_utf8_validate (remainder, remaining_bytes, &invalid))
+	(void) user_data;
+
+	switch (stage) {
+	case 0:
+		if (gladexml == NULL)
+			break;
+		geo_photos_open_dialog_photo_correlate ();
+		stage = 1;
+		ticks = 0;
+		break;
+	case 1:
+		if (dialog_photo_correlate == NULL)
+			break;
+		button = lookup_widget (dialog_photo_correlate, "button40");
+		if (button == NULL)
+			break;
+		geocode_set_photodir ((char *) photo_dir, button);
+		stage = 2;
+		ticks = 0;
+		break;
+	case 2:
+		if (dialog_photo_correlate == NULL)
+			break;
+		geo_photos_open_dialog_image_data ();
+		stage = 3;
+		ticks = 0;
+		break;
+	case 3:
+		if (dialog_image_data == NULL)
+			break;
+		camera_label = lookup_widget (dialog_image_data, "label163");
+		gps_label = lookup_widget (dialog_image_data, "label171");
+		if (camera_label == NULL || gps_label == NULL)
 			break;
 
-		valid_bytes = invalid - remainder;
-		if (string == NULL)
-			string = g_string_sized_new (remaining_bytes);
+		camera_text = gtk_label_get_text (GTK_LABEL (camera_label));
+		gps_text = gtk_label_get_text (GTK_LABEL (gps_label));
+		g_print ("CAMERA=%s\n", camera_text ? camera_text : "");
+		g_print ("GPS=%s\n", gps_text ? gps_text : "");
+		fflush (stdout);
 
-		g_string_append_len (string, remainder, valid_bytes);
-		g_string_append_c (string, '?');
-		remaining_bytes -= valid_bytes + 1;
-		remainder = invalid + 1;
+		if (camera_text && strcmp (camera_text, expected_datetime) == 0)
+			_exit (0);
+
+		break;
 	}
 
-	if (string == NULL)
-		return g_strdup (str);
-
-	g_string_append (string, remainder);
-	g_string_append (string, " (invalid Unicode)");
-	return g_string_free (string, FALSE);
-}
-
-static void
-plugin_set_label (GtkWidget *widget,
-		  ExifData *exif_data,
-		  gint tag_id)
-{
-	gchar exif_buffer[512];
-	const gchar *buf_ptr = NULL;
-	gchar *label_text = NULL;
-
-	if (exif_data) {
-		buf_ptr = eog_exif_data_get_value (exif_data, tag_id,
-						 exif_buffer,
-						 sizeof (exif_buffer));
-		if (tag_id == EXIF_TAG_DATE_TIME_ORIGINAL && buf_ptr)
-			label_text = eog_exif_util_format_date (buf_ptr);
-		else if (buf_ptr)
-			label_text = make_valid_utf8 (buf_ptr);
+	if (++ticks > 60) {
+		g_printerr ("foxtrotgps probe timed out in stage %d\n", stage);
+		_exit (1);
 	}
 
-	gtk_label_set_text (GTK_LABEL (widget), label_text);
-	g_free (label_text);
+	return TRUE;
 }
 
-int
-main (int argc, char **argv)
+void
+gtk_main (void)
 {
-	ExifData *exif_data;
-	GtkWidget *model_label;
-	GtkWidget *date_label;
+	static void (*real_gtk_main) (void);
 
-	if (argc != 2)
-		return 2;
+	if (real_gtk_main == NULL)
+		real_gtk_main = dlsym (RTLD_NEXT, "gtk_main");
 
-	gtk_init (&argc, &argv);
-	exif_data = exif_data_new_from_file (argv[1]);
-	if (!exif_data)
-		return 1;
+	photo_dir = getenv ("LIBEXIF_FOXTROTGPS_PHOTO_DIR");
+	if (photo_dir == NULL || *photo_dir == '\0') {
+		g_printerr ("missing LIBEXIF_FOXTROTGPS_PHOTO_DIR\n");
+		_exit (2);
+	}
 
-	model_label = gtk_label_new (NULL);
-	date_label = gtk_label_new (NULL);
-	plugin_set_label (model_label, exif_data, EXIF_TAG_MODEL);
-	plugin_set_label (date_label, exif_data, EXIF_TAG_DATE_TIME_ORIGINAL);
-
-	g_print ("MODEL=%s\n", gtk_label_get_text (GTK_LABEL (model_label)));
-	g_print ("DATE=%s\n", gtk_label_get_text (GTK_LABEL (date_label)));
-
-	exif_data_unref (exif_data);
-	return 0;
+	unsetenv ("LD_PRELOAD");
+	g_timeout_add (250, probe_cb, NULL);
+	real_gtk_main ();
 }
 EOF
 }
 
-build_foxtrotgps_exif_probe() {
+build_gtkam_runtime_probe() {
   local output_path="$1"
 
   cat >"$output_path" <<'EOF'
-#include <ctype.h>
-#include <glib.h>
-#include <libexif/exif-data.h>
-#include <libexif/exif-tag.h>
+#define _GNU_SOURCE
+
+#include <dlfcn.h>
+#include <gtk/gtk.h>
 
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
+
+typedef struct _GtkamDialogPrivate GtkamDialogPrivate;
+typedef struct _GtkamListPrivate GtkamListPrivate;
+
+typedef struct _GtkamDialog {
+	GtkDialog parent;
+	GtkWidget *image;
+	GtkWidget *vbox;
+	GtkamDialogPrivate *priv;
+} GtkamDialog;
+
+typedef struct _GtkamChooserPrivate {
+	void *al;
+	void *il;
+
+	GtkWidget *label_speed;
+	GtkWidget *check_multi;
+	GtkWidget *button_add;
+	GtkWidget *table;
+	GtkEntry *entry_model;
+	GtkEntry *entry_port;
+	GtkEntry *entry_speed;
+	GtkCombo *combo_model;
+	GtkCombo *combo_port;
+	GtkCombo *combo_speed;
+
+	GtkWidget *ok;
+
+	GtkTooltips *tooltips;
+
+	gboolean needs_update;
+} GtkamChooserPrivate;
+
+typedef struct _GtkamChooser {
+	GtkamDialog parent;
+	GtkWidget *apply_button;
+	GtkamChooserPrivate *priv;
+} GtkamChooser;
+
+struct _GtkamListPrivate {
+	GtkListStore *store;
+	gboolean thumbnails;
+	GtkTreeViewColumn *col_previews;
+	GtkItemFactory *factory;
+	GtkTreeIter iter;
+	void *head;
+	void *tail;
+};
+
+typedef struct _GtkamList {
+	GtkTreeView parent;
+	GtkamListPrivate *priv;
+} GtkamList;
+
+static const char *camera_model;
+static const char *camera_port;
+static GtkWidget *saved_menu_item;
+static int stage;
+static int ticks;
+static gboolean debug_enabled;
+
+static GtkWidget *find_tree_view_with_columns (GtkWidget *widget,
+						 gint n_columns);
 
 static void
-trim_spaces (char *buf)
+debug (const char *format, ...)
+{
+	va_list args;
+
+	if (!debug_enabled)
+		return;
+
+	va_start (args, format);
+	vfprintf (stderr, format, args);
+	va_end (args);
+	fflush (stderr);
+}
+
+static void
+flush_events (int rounds)
 {
 	int i;
 
-	for (i = (int) strlen (buf) - 1; i > 0; i--) {
-		if (isspace ((unsigned char) buf[i]))
+	for (i = 0; i < rounds; i++) {
+		while (gtk_events_pending ())
+			gtk_main_iteration ();
+	}
+}
+
+static GtkWidget *
+find_widget_by_name (GtkWidget *widget, const char *name)
+{
+	GList *children;
+	GList *iter;
+	GtkWidget *found;
+
+	if (widget == NULL)
+		return NULL;
+
+	if (strcmp (gtk_widget_get_name (widget), name) == 0)
+		return widget;
+
+	if (!GTK_IS_CONTAINER (widget))
+		return NULL;
+
+	children = gtk_container_get_children (GTK_CONTAINER (widget));
+	for (iter = children; iter; iter = iter->next) {
+		found = find_widget_by_name (GTK_WIDGET (iter->data), name);
+		if (found != NULL) {
+			g_list_free (children);
+			return found;
+		}
+	}
+	g_list_free (children);
+
+	return NULL;
+}
+
+static GtkWidget *
+find_toplevel_by_type_name (const char *type_name)
+{
+	GList *toplevels;
+	GList *iter;
+	GtkWidget *window;
+
+	toplevels = gtk_window_list_toplevels ();
+	for (iter = toplevels; iter; iter = iter->next) {
+		window = GTK_WIDGET (iter->data);
+		if (strcmp (G_OBJECT_TYPE_NAME (window), type_name) == 0) {
+			g_list_free (toplevels);
+			return window;
+		}
+	}
+	g_list_free (toplevels);
+
+	return NULL;
+}
+
+static GtkWidget *
+find_widget_in_toplevels_by_name (const char *name)
+{
+	GList *toplevels;
+	GList *iter;
+	GtkWidget *found;
+
+	toplevels = gtk_window_list_toplevels ();
+	for (iter = toplevels; iter; iter = iter->next) {
+		found = find_widget_by_name (GTK_WIDGET (iter->data), name);
+		if (found != NULL) {
+			g_list_free (toplevels);
+			return found;
+		}
+	}
+	g_list_free (toplevels);
+
+	return NULL;
+}
+
+static GtkWidget *
+find_tree_view_in_toplevels_with_columns (gint n_columns)
+{
+	GList *toplevels;
+	GList *iter;
+	GtkWidget *found;
+
+	toplevels = gtk_window_list_toplevels ();
+	for (iter = toplevels; iter; iter = iter->next) {
+		found = find_tree_view_with_columns (GTK_WIDGET (iter->data),
+						     n_columns);
+		if (found != NULL) {
+			g_list_free (toplevels);
+			return found;
+		}
+	}
+	g_list_free (toplevels);
+
+	return NULL;
+}
+
+static gint
+tree_view_column_count (GtkTreeView *view)
+{
+	GList *columns;
+	gint count;
+
+	columns = gtk_tree_view_get_columns (view);
+	count = g_list_length (columns);
+	g_list_free (columns);
+
+	return count;
+}
+
+static void
+debug_dump_tree_views (GtkWidget *widget)
+{
+	GList *children;
+	GList *iter;
+
+	if (widget == NULL)
+		return;
+
+	if (GTK_IS_TREE_VIEW (widget))
+		debug ("  treeview=%p columns=%d type=%s\n", (void *) widget,
+		       tree_view_column_count (GTK_TREE_VIEW (widget)),
+		       G_OBJECT_TYPE_NAME (widget));
+
+	if (!GTK_IS_CONTAINER (widget))
+		return;
+
+	children = gtk_container_get_children (GTK_CONTAINER (widget));
+	for (iter = children; iter; iter = iter->next)
+		debug_dump_tree_views (GTK_WIDGET (iter->data));
+	g_list_free (children);
+}
+
+static void
+debug_dump_toplevels (void)
+{
+	GList *toplevels;
+	GList *iter;
+	GtkWidget *widget;
+	const char *title;
+
+	toplevels = gtk_window_list_toplevels ();
+	for (iter = toplevels; iter; iter = iter->next) {
+		widget = GTK_WIDGET (iter->data);
+		title = GTK_IS_WINDOW (widget) ?
+			gtk_window_get_title (GTK_WINDOW (widget)) : "";
+		debug ("toplevel=%p type=%s title=%s\n", (void *) widget,
+		       G_OBJECT_TYPE_NAME (widget), title ? title : "");
+		debug_dump_tree_views (widget);
+	}
+	g_list_free (toplevels);
+}
+
+static GtkWidget *
+find_tree_view_with_columns (GtkWidget *widget, gint n_columns)
+{
+	GList *children;
+	GList *iter;
+	GtkWidget *found;
+
+	if (widget == NULL)
+		return NULL;
+
+	if (GTK_IS_TREE_VIEW (widget) &&
+	    tree_view_column_count (GTK_TREE_VIEW (widget)) == n_columns)
+		return widget;
+
+	if (!GTK_IS_CONTAINER (widget))
+		return NULL;
+
+	children = gtk_container_get_children (GTK_CONTAINER (widget));
+	for (iter = children; iter; iter = iter->next) {
+		found = find_tree_view_with_columns (GTK_WIDGET (iter->data),
+						     n_columns);
+		if (found != NULL) {
+			g_list_free (children);
+			return found;
+		}
+	}
+	g_list_free (children);
+
+	return NULL;
+}
+
+static gboolean
+iter_has_text (GtkTreeModel *model, GtkTreeIter *iter, const char *needle)
+{
+	int i;
+	int n_columns;
+
+	n_columns = gtk_tree_model_get_n_columns (model);
+	for (i = 0; i < n_columns; i++) {
+		GType type;
+		gchar *value = NULL;
+
+		type = gtk_tree_model_get_column_type (model, i);
+		if (!g_type_is_a (type, G_TYPE_STRING))
 			continue;
-		break;
-	}
-	buf[++i] = '\0';
-}
 
-static char *
-show_tag (ExifData *data, ExifIfd ifd, ExifTag tag)
-{
-	char buf[1024] = {0};
-	ExifEntry *entry = exif_content_get_entry (data->ifd[ifd], tag);
-
-	if (entry) {
-		exif_entry_get_value (entry, buf, sizeof (buf));
-		trim_spaces (buf);
-		if (*buf)
-			printf ("%s: %s\n", exif_tag_get_name_in_ifd (tag, ifd), buf);
+		gtk_tree_model_get (model, iter, i, &value, -1);
+		if (value && strcmp (value, needle) == 0) {
+			g_free (value);
+			return TRUE;
+		}
+		g_free (value);
 	}
 
-	return g_strdup (buf);
+	return FALSE;
 }
 
-int
-main (int argc, char **argv)
-{
-	ExifData *data;
-	char *date;
-	char *lat_ref;
-	char *latitude;
-
-	if (argc != 2)
-		return 2;
-
-	data = exif_data_new_from_file (argv[1]);
-	if (!data)
-		return 1;
-
-	date = show_tag (data, EXIF_IFD_0, EXIF_TAG_DATE_TIME);
-	lat_ref = show_tag (data, EXIF_IFD_GPS, EXIF_TAG_GPS_LATITUDE_REF);
-	latitude = show_tag (data, EXIF_IFD_GPS, EXIF_TAG_GPS_LATITUDE);
-
-	printf ("DATE_COPY=%s\n", date);
-	printf ("LATREF_COPY=%s\n", lat_ref);
-	printf ("LAT_COPY=%s\n", latitude);
-
-	g_free (date);
-	g_free (lat_ref);
-	g_free (latitude);
-	exif_data_unref (data);
-	return 0;
-}
-EOF
-}
-
-build_gtkam_exif_probe() {
-  local output_path="$1"
-
-  cat >"$output_path" <<'EOF'
-#include <gtk/gtk.h>
-#include <gphoto2/gphoto2-abilities-list.h>
-#include <gphoto2/gphoto2-camera.h>
-#include <gphoto2/gphoto2-context.h>
-#include <gphoto2/gphoto2-file.h>
-#include <gphoto2/gphoto2-port-info-list.h>
-#include <libexif/exif-data.h>
-#include <libexif-gtk/gtk-exif-browser.h>
-
-#include <stdio.h>
-
-static GtkWidget *views[8];
-static int nviews = 0;
-
-static void
-collect_views (GtkWidget *widget)
-{
-	if (GTK_IS_TREE_VIEW (widget) && nviews < 8)
-		views[nviews++] = widget;
-
-	if (GTK_IS_CONTAINER (widget)) {
-		GList *children = gtk_container_get_children (GTK_CONTAINER (widget));
-		for (GList *iter = children; iter; iter = iter->next)
-			collect_views (GTK_WIDGET (iter->data));
-		g_list_free (children);
-	}
-}
-
-static void
-dump_model (GtkTreeModel *model)
+static gboolean
+find_iter_by_text (GtkTreeModel *model,
+		      GtkTreeIter *parent,
+		      GtkTreeIter *result,
+		      const char *needle)
 {
 	GtkTreeIter iter;
-	gboolean valid = gtk_tree_model_get_iter_first (model, &iter);
+	gboolean valid;
 
+	if (parent != NULL)
+		valid = gtk_tree_model_iter_children (model, &iter, parent);
+	else
+		valid = gtk_tree_model_get_iter_first (model, &iter);
+
+	while (valid) {
+		if (iter_has_text (model, &iter, needle)) {
+			*result = iter;
+			return TRUE;
+		}
+		if (find_iter_by_text (model, &iter, result, needle))
+			return TRUE;
+		valid = gtk_tree_model_iter_next (model, &iter);
+	}
+
+	return FALSE;
+}
+
+static void
+select_iter (GtkTreeView *view, GtkTreeIter *iter)
+{
+	GtkTreePath *path;
+	GtkTreeSelection *selection;
+
+	path = gtk_tree_model_get_path (gtk_tree_view_get_model (view), iter);
+	gtk_tree_view_expand_to_path (view, path);
+	gtk_tree_view_scroll_to_cell (view, path, NULL, FALSE, 0.0, 0.0);
+
+	selection = gtk_tree_view_get_selection (view);
+	gtk_tree_selection_unselect_all (selection);
+	gtk_tree_selection_select_iter (selection, iter);
+
+	gtk_tree_path_free (path);
+}
+
+static void
+dump_tree_view_rows (GtkTreeView *view, int *have_model, int *have_date)
+{
+	GtkTreeModel *model;
+	GtkTreeIter iter;
+	gboolean valid;
+
+	model = gtk_tree_view_get_model (view);
+	if (model == NULL)
+		return;
+
+	valid = gtk_tree_model_get_iter_first (model, &iter);
 	while (valid) {
 		gchar *tag = NULL;
 		gchar *value = NULL;
 
 		gtk_tree_model_get (model, &iter, 0, &tag, 1, &value, -1);
-		if (tag && value)
-			printf ("ROW|%s|%s\n", tag, value);
+		if (tag && value) {
+			g_print ("ROW|%s|%s\n", tag, value);
+			if (strcmp (tag, "Model") == 0 &&
+			    strcmp (value, "FinePix Z33WP") == 0)
+				*have_model = 1;
+			if (strcmp (tag, "DateTimeOriginal") == 0 &&
+			    strcmp (value, "2009:03:25 03:27:25") == 0)
+				*have_date = 1;
+		}
 		g_free (tag);
 		g_free (value);
 		valid = gtk_tree_model_iter_next (model, &iter);
 	}
 }
 
-int
-main (int argc, char **argv)
+static void
+scan_widget_for_exif_rows (GtkWidget *widget, int *have_model, int *have_date)
 {
-	Camera *camera = NULL;
-	GPContext *context = gp_context_new ();
-	CameraAbilitiesList *abilities = NULL;
-	GPPortInfoList *ports = NULL;
-	CameraAbilities ability;
-	GPPortInfo port;
-	CameraFile *file = NULL;
-	const char *data = NULL;
-	unsigned long size = 0;
-	ExifData *exif_data;
-	int index;
+	GList *children;
+	GList *iter;
 
-	if (argc != 3)
-		return 2;
+	if (widget == NULL)
+		return;
 
-	gtk_init (&argc, &argv);
-	gp_camera_new (&camera);
-	gp_abilities_list_new (&abilities);
-	gp_abilities_list_load (abilities, context);
-	index = gp_abilities_list_lookup_model (abilities, "Directory Browse");
-	if (index < 0)
-		return 3;
-	gp_abilities_list_get_abilities (abilities, index, &ability);
-	gp_camera_set_abilities (camera, ability);
+	if (GTK_IS_TREE_VIEW (widget))
+		dump_tree_view_rows (GTK_TREE_VIEW (widget), have_model, have_date);
 
-	gp_port_info_list_new (&ports);
-	gp_port_info_list_load (ports);
-	index = gp_port_info_list_lookup_path (ports, argv[1]);
-	if (index < 0)
-		return 4;
-	gp_port_info_list_get_info (ports, index, &port);
-	gp_camera_set_port_info (camera, port);
+	if (!GTK_IS_CONTAINER (widget))
+		return;
 
-	if (gp_camera_init (camera, context) < 0)
-		return 5;
-	gp_file_new (&file);
-	if (gp_camera_file_get (camera, "/", argv[2], GP_FILE_TYPE_EXIF,
-				file, context) < 0)
-		return 6;
-	gp_file_get_data_and_size (file, &data, &size);
-	exif_data = exif_data_new_from_data ((const unsigned char *) data, size);
-	if (!exif_data)
-		return 7;
+	children = gtk_container_get_children (GTK_CONTAINER (widget));
+	for (iter = children; iter; iter = iter->next)
+		scan_widget_for_exif_rows (GTK_WIDGET (iter->data),
+					   have_model, have_date);
+	g_list_free (children);
+}
 
-	GtkWidget *browser = gtk_exif_browser_new ();
-	gtk_exif_browser_set_data (GTK_EXIF_BROWSER (browser), exif_data);
-	gtk_widget_show_all (browser);
-	while (gtk_events_pending ())
-		gtk_main_iteration ();
-	collect_views (browser);
-	for (int i = 0; i < nviews; i++)
-		dump_model (gtk_tree_view_get_model (GTK_TREE_VIEW (views[i])));
+static gboolean
+probe_cb (gpointer user_data)
+{
+	GtkWidget *chooser_widget;
+	GtkWidget *add_camera_item;
+	GtkWidget *tree_widget;
+	GtkWidget *list_widget;
+	GList *toplevels;
+	GList *iter;
+	GtkTreeModel *model;
+	GtkTreeIter selected_iter;
+	GtkamChooser *chooser;
+	GtkamList *list;
+	int have_model = 0;
+	int have_date = 0;
 
-	exif_data_unref (exif_data);
-	gp_file_unref (file);
-	gp_camera_exit (camera, context);
-	gp_camera_unref (camera);
-	gp_abilities_list_free (abilities);
-	gp_port_info_list_free (ports);
-	gp_context_unref (context);
-	return 0;
+	(void) user_data;
+
+	switch (stage) {
+	case 0:
+		add_camera_item = find_widget_in_toplevels_by_name ("AddCamera");
+		debug ("stage0 add=%p\n", (void *) add_camera_item);
+		if (add_camera_item == NULL)
+			break;
+		gtk_menu_item_activate (GTK_MENU_ITEM (add_camera_item));
+		stage = 1;
+		ticks = 0;
+		break;
+	case 1:
+		chooser_widget = find_toplevel_by_type_name ("GtkamChooser");
+		debug ("stage1 chooser=%p\n", (void *) chooser_widget);
+		if (chooser_widget == NULL)
+			break;
+		chooser = (GtkamChooser *) chooser_widget;
+		if (chooser->priv == NULL || chooser->priv->ok == NULL)
+			break;
+
+		gtk_entry_set_text (chooser->priv->entry_model, camera_model);
+		gtk_entry_set_text (chooser->priv->entry_port, camera_port);
+		gtk_entry_set_text (chooser->priv->entry_speed, "Best");
+		flush_events (10);
+		gtk_button_clicked (GTK_BUTTON (chooser->priv->ok));
+		stage = 2;
+		ticks = 0;
+		break;
+	case 2:
+		debug ("stage2 chooser_still_open=%p\n",
+		       (void *) find_toplevel_by_type_name ("GtkamChooser"));
+		tree_widget = find_tree_view_in_toplevels_with_columns (1);
+		list_widget = find_tree_view_in_toplevels_with_columns (3);
+		debug ("stage2 tree=%p list=%p\n", (void *) tree_widget,
+		       (void *) list_widget);
+		if (tree_widget == NULL || list_widget == NULL)
+			debug_dump_toplevels ();
+		if (tree_widget == NULL || list_widget == NULL)
+			break;
+
+		model = gtk_tree_view_get_model (GTK_TREE_VIEW (tree_widget));
+		if (model == NULL ||
+		    !find_iter_by_text (model, NULL, &selected_iter,
+					"Directory Browse"))
+			break;
+
+		select_iter (GTK_TREE_VIEW (tree_widget), &selected_iter);
+		flush_events (10);
+
+		model = gtk_tree_view_get_model (GTK_TREE_VIEW (list_widget));
+		if (model == NULL ||
+		    !find_iter_by_text (model, NULL, &selected_iter, "fuji.jpg"))
+			break;
+
+		select_iter (GTK_TREE_VIEW (list_widget), &selected_iter);
+		list = (GtkamList *) list_widget;
+		list->priv->iter = selected_iter;
+		saved_menu_item = gtk_item_factory_get_widget (list->priv->factory,
+							      "/View EXIF data");
+		debug ("saved_menu_item=%p\n", (void *) saved_menu_item);
+		if (saved_menu_item == NULL)
+			break;
+
+		stage = 3;
+		ticks = 0;
+		break;
+	case 3:
+		debug ("stage3 activating=%p\n", (void *) saved_menu_item);
+		if (saved_menu_item == NULL)
+			break;
+		gtk_menu_item_activate (GTK_MENU_ITEM (saved_menu_item));
+		saved_menu_item = NULL;
+		stage = 4;
+		ticks = 0;
+		break;
+	case 4:
+		flush_events (10);
+		toplevels = gtk_window_list_toplevels ();
+		for (iter = toplevels; iter; iter = iter->next)
+			scan_widget_for_exif_rows (GTK_WIDGET (iter->data),
+						   &have_model, &have_date);
+		g_list_free (toplevels);
+		debug ("stage4 have_model=%d have_date=%d\n", have_model,
+		       have_date);
+		fflush (stdout);
+
+		if (have_model && have_date)
+			_exit (0);
+		break;
+	}
+
+	if (++ticks > 60) {
+		g_printerr ("gtkam probe timed out in stage %d\n", stage);
+		_exit (1);
+	}
+
+	return TRUE;
+}
+
+void
+gtk_main (void)
+{
+	static void (*real_gtk_main) (void);
+
+	if (real_gtk_main == NULL)
+		real_gtk_main = dlsym (RTLD_NEXT, "gtk_main");
+
+	camera_model = getenv ("LIBEXIF_GTKAM_CAMERA_MODEL");
+	camera_port = getenv ("LIBEXIF_GTKAM_CAMERA_PORT");
+	debug_enabled = getenv ("LIBEXIF_GTKAM_DEBUG") != NULL;
+	if (camera_model == NULL || *camera_model == '\0' ||
+	    camera_port == NULL || *camera_port == '\0') {
+		g_printerr ("missing GTKam probe environment\n");
+		_exit (2);
+	}
+
+	unsetenv ("LD_PRELOAD");
+	g_timeout_add (250, probe_cb, NULL);
+	real_gtk_main ();
 }
 EOF
 }
@@ -914,6 +1286,94 @@ EOF
   require_contains "$log_dir/map-state.out" "sensitive=$expected_sensitive"
 }
 
+run_eog_exif_display_probe() {
+  local image_path="$1"
+  local log_dir="$2"
+
+  mkdir -p "$log_dir"
+
+  cat >"$log_dir/check-eog-exif-display.py" <<'EOF'
+from dogtail.tree import root
+from dogtail.utils import doDelay
+
+EXPECTED = [
+    "libexif-gps",
+    "Tue, 02 January 2024  03:04:05",
+]
+
+
+def collect_text(node, out):
+    for attr in ("name", "description"):
+        value = getattr(node, attr, None)
+        if value:
+            out.append(str(value))
+    try:
+        children = node.children
+    except Exception:
+        return
+    for child in children:
+        collect_text(child, out)
+
+
+for _ in range(60):
+    try:
+        app = root.application("eog")
+        break
+    except Exception:
+        doDelay(1)
+else:
+    raise SystemExit("eog not found")
+
+for _ in range(8):
+    doDelay(1)
+
+texts = []
+collect_text(app, texts)
+for expected in EXPECTED:
+    if not any(expected in text for text in texts):
+        raise SystemExit(f"missing {expected!r}")
+
+for text in texts:
+    print(text)
+EOF
+
+  cat >"$log_dir/run-eog-exif-display.sh" <<EOF
+set -euo pipefail
+export NO_AT_BRIDGE=0
+export GTK_MODULES=gail:atk-bridge
+gsettings set org.gnome.eog.plugins active-plugins "['exif-display']"
+eog "$image_path" >"$log_dir/eog.stdout" 2>"$log_dir/eog.stderr" &
+app_pid=\$!
+window_name="$(basename "$image_path")"
+for _ in \$(seq 1 30); do
+  wid="\$(xdotool search --onlyvisible --name "\$window_name" 2>/dev/null | head -n1 || true)"
+  if [[ -n "\$wid" ]]; then
+    break
+  fi
+  sleep 1
+done
+if [[ -z "\${wid:-}" ]]; then
+  echo "failed to locate eog window for \$window_name" >&2
+  exit 1
+fi
+xdotool key --window "\$wid" F9
+sleep 3
+python3 "$log_dir/check-eog-exif-display.py" >"$log_dir/exif-display.out"
+gsettings get org.gnome.eog.plugins active-plugins >"$log_dir/active.txt"
+kill "\$app_pid" || true
+wait "\$app_pid" || true
+EOF
+
+  if ! timeout 40 xvfb-run -a dbus-run-session -- bash "$log_dir/run-eog-exif-display.sh" >"$log_dir/dbus.log" 2>&1; then
+    cat "$log_dir/dbus.log" >&2
+    exit 1
+  fi
+
+  require_contains "$log_dir/active.txt" 'exif-display'
+  require_contains "$log_dir/exif-display.out" 'libexif-gps'
+  require_contains "$log_dir/exif-display.out" 'Tue, 02 January 2024  03:04:05'
+}
+
 test_exif() {
   local dir="$1"
 
@@ -941,18 +1401,9 @@ test_exiftran() {
 
 test_eog_plugin_exif_display() {
   local dir="$1"
-  local probe_src="$dir/eog-exif-display-probe.c"
-  local probe_bin="$dir/eog-exif-display-probe"
 
   assert_binary_uses_active_libexif "$EOG_PLUGIN_DIR/libexif-display.so"
-  build_eog_exif_display_probe "$probe_src"
-  cc -o "$probe_bin" "$probe_src" \
-    $(pkg-config --cflags --libs gtk+-3.0 eog libexif) \
-    -Wl,-rpath,/usr/lib/$MULTIARCH/eog
-  assert_binary_uses_active_libexif "$probe_bin"
-  xvfb-run -a "$probe_bin" "$FUJI_FIXTURE" >"$dir/eog-exif-display.out"
-  require_contains "$dir/eog-exif-display.out" 'MODEL=FinePix Z33WP'
-  require_contains "$dir/eog-exif-display.out" 'DATE=Wed, 25 March 2009  03:27:25'
+  run_eog_exif_display_probe "$GPS_FIXTURE" "$dir/eog-exif-display"
 }
 
 test_eog_plugin_map() {
@@ -991,17 +1442,29 @@ test_shotwell() {
 
 test_foxtrotgps() {
   local dir="$1"
-  local probe_src="$dir/foxtrotgps-exif-probe.c"
-  local probe_bin="$dir/foxtrotgps-exif-probe"
+  local probe_src="$dir/foxtrotgps-runtime-probe.c"
+  local probe_so="$dir/foxtrotgps-runtime-probe.so"
+  local photo_dir="$dir/photos"
+  local status=0
 
   assert_binary_uses_active_libexif /usr/bin/foxtrotgps
-  build_foxtrotgps_exif_probe "$probe_src"
-  cc -o "$probe_bin" "$probe_src" $(pkg-config --cflags --libs glib-2.0 libexif)
-  assert_binary_uses_active_libexif "$probe_bin"
-  "$probe_bin" "$GPS_FIXTURE" >"$dir/foxtrotgps.out"
-  require_contains "$dir/foxtrotgps.out" 'DATE_COPY=2024:01:02 03:04:05'
-  require_contains "$dir/foxtrotgps.out" 'LATREF_COPY=N'
-  require_contains "$dir/foxtrotgps.out" 'LAT_COPY=33, 26, 27.36'
+  mkdir -p "$photo_dir"
+  cp "$GPS_FIXTURE" "$photo_dir/photo.jpg"
+  build_foxtrotgps_runtime_probe "$probe_src"
+  cc -shared -fPIC -Wall -Wextra -Wno-deprecated-declarations \
+    -o "$probe_so" "$probe_src" \
+    $(pkg-config --cflags --libs gtk+-2.0) -ldl
+  timeout 40 dbus-run-session -- xvfb-run -a sh -c \
+    'LIBEXIF_FOXTROTGPS_PHOTO_DIR="$1" LD_PRELOAD="$2" exec /usr/bin/foxtrotgps' \
+    sh "$photo_dir" "$probe_so" >"$dir/foxtrotgps.out" 2>"$dir/foxtrotgps.err" || status=$?
+  if [[ "${status:-0}" != 0 ]]; then
+    cat "$dir/foxtrotgps.out" >&2 || true
+    cat "$dir/foxtrotgps.err" >&2 || true
+  fi
+  assert_status_equals 0 "${status:-0}" "foxtrotgps"
+  require_contains "$dir/foxtrotgps.out" 'CAMERA=2024:01:02 03:04:05'
+  require_not_contains "$dir/foxtrotgps.out" 'symbol lookup error'
+  require_not_contains "$dir/foxtrotgps.err" 'symbol lookup error'
 }
 
 test_gphoto2() {
@@ -1017,14 +1480,24 @@ test_gphoto2() {
 
 test_gtkam() {
   local dir="$1"
-  local probe_src="$dir/gtkam-exif-probe.c"
-  local probe_bin="$dir/gtkam-exif-probe"
+  local probe_src="$dir/gtkam-runtime-probe.c"
+  local probe_so="$dir/gtkam-runtime-probe.so"
+  local status=0
 
   assert_binary_uses_active_libexif /usr/bin/gtkam
-  build_gtkam_exif_probe "$probe_src"
-  cc -o "$probe_bin" "$probe_src" $(pkg-config --cflags --libs libexif-gtk libgphoto2)
-  assert_binary_uses_active_libexif "$probe_bin"
-  xvfb-run -a "$probe_bin" "disk:$GPHOTO_FIXTURE_DIR" "fuji.jpg" >"$dir/gtkam.out"
+  build_gtkam_runtime_probe "$probe_src"
+  cc -shared -fPIC -Wall -Wextra -Wno-deprecated-declarations \
+    -o "$probe_so" "$probe_src" \
+    $(pkg-config --cflags --libs gtk+-2.0) -ldl
+  timeout 40 xvfb-run -a sh -c \
+    'LIBEXIF_GTKAM_CAMERA_MODEL="$1" LIBEXIF_GTKAM_CAMERA_PORT="$2" LIBEXIF_GTKAM_DEBUG=1 LD_PRELOAD="$3" exec /usr/bin/gtkam' \
+    sh 'Directory Browse' "Disk (disk:$GPHOTO_FIXTURE_DIR)" "$probe_so" \
+    >"$dir/gtkam.out" 2>"$dir/gtkam.err" || status=$?
+  if [[ "${status:-0}" != 0 ]]; then
+    cat "$dir/gtkam.out" >&2 || true
+    cat "$dir/gtkam.err" >&2 || true
+  fi
+  assert_status_equals 0 "${status:-0}" "gtkam"
   require_contains "$dir/gtkam.out" 'ROW|Model|FinePix Z33WP'
   require_contains "$dir/gtkam.out" 'ROW|DateTimeOriginal|2009:03:25 03:27:25'
 }
