@@ -12,8 +12,8 @@ use crate::object::entry::{
 use crate::runtime::cstdio::print_line;
 use crate::runtime::log::{exif_log_ref_impl, exif_log_unref_impl};
 use crate::runtime::mem::{
-    exif_mem_alloc_impl, exif_mem_free_impl, exif_mem_new_default_impl, exif_mem_ref_impl,
-    exif_mem_realloc_impl, exif_mem_unref_impl,
+    exif_mem_alloc_impl, exif_mem_free_impl, exif_mem_new_default_impl, exif_mem_realloc_impl,
+    exif_mem_ref_impl, exif_mem_unref_impl,
 };
 use crate::tables::tag_table::{exif_tag_get_support_level_in_ifd, TAG_TABLE};
 
@@ -22,6 +22,7 @@ pub(crate) struct ContentPrivate {
     ref_count: u32,
     mem: *mut ExifMem,
     log: *mut ExifLog,
+    entry_capacity: c_uint,
 }
 
 #[inline]
@@ -63,6 +64,7 @@ pub(crate) unsafe fn exif_content_new_mem_impl(mem: *mut ExifMem) -> *mut ExifCo
         (*private).ref_count = 1;
         (*private).mem = mem;
         (*private).log = ptr::null_mut();
+        (*private).entry_capacity = 0;
         (*content).entries = ptr::null_mut();
         (*content).count = 0;
         (*content).parent = ptr::null_mut();
@@ -143,13 +145,18 @@ pub(crate) unsafe fn exif_content_add_entry_impl(content: *mut ExifContent, entr
     let Some(new_len) = count.checked_add(1) else {
         return;
     };
-    let Some(bytes) = new_len.checked_mul(size_of::<*mut ExifEntry>()) else {
-        return;
-    };
 
-    let entries =
-        unsafe { exif_mem_realloc_impl(content_mem(content), (*content).entries.cast(), bytes as ExifLong) }
-            .cast::<*mut ExifEntry>();
+    let current_capacity = unsafe { (*content_private(content)).entry_capacity as usize };
+    let target_capacity = if new_len <= current_capacity {
+        current_capacity
+    } else {
+        current_capacity.max(4).saturating_mul(2).max(new_len)
+    };
+    if unsafe { !exif_content_reserve_entries_impl(content, target_capacity) } {
+        return;
+    }
+
+    let entries = unsafe { (*content).entries };
     if entries.is_null() {
         return;
     }
@@ -157,10 +164,45 @@ pub(crate) unsafe fn exif_content_add_entry_impl(content: *mut ExifContent, entr
     unsafe {
         (*entry).parent = content;
         *entries.add(count) = entry;
-        (*content).entries = entries;
         (*content).count = new_len as c_uint;
         exif_entry_ref_impl(entry);
     }
+}
+
+pub(crate) unsafe fn exif_content_reserve_entries_impl(
+    content: *mut ExifContent,
+    capacity: usize,
+) -> bool {
+    if content.is_null() || unsafe { (*content).priv_ }.is_null() {
+        return false;
+    }
+
+    let private = unsafe { &mut *content_private(content) };
+    let current_capacity = private.entry_capacity as usize;
+    if capacity <= current_capacity {
+        return true;
+    }
+
+    let Some(bytes) = capacity.checked_mul(size_of::<*mut ExifEntry>()) else {
+        return false;
+    };
+    let entries = unsafe {
+        exif_mem_realloc_impl(
+            content_mem(content),
+            (*content).entries.cast(),
+            bytes as ExifLong,
+        )
+    }
+    .cast::<*mut ExifEntry>();
+    if entries.is_null() {
+        return false;
+    }
+
+    unsafe {
+        (*content).entries = entries;
+    }
+    private.entry_capacity = capacity as c_uint;
+    true
 }
 
 pub(crate) unsafe fn exif_content_remove_entry_impl(
@@ -194,29 +236,23 @@ pub(crate) unsafe fn exif_content_remove_entry_impl(
 
     if count > 1 {
         let new_count = count - 1;
-        let bytes = new_count * size_of::<*mut ExifEntry>();
-        let temp = unsafe { *entries.add(count - 1) };
-        let resized = unsafe {
-            exif_mem_realloc_impl(content_mem(content), entries.cast(), bytes as ExifLong)
-        }
-        .cast::<*mut ExifEntry>();
-        if resized.is_null() {
-            return;
-        }
-
         unsafe {
-            (*content).entries = resized;
-            (*content).count = new_count as c_uint;
             if index != new_count {
-                ptr::copy(resized.add(index + 1), resized.add(index), new_count - index - 1);
-                *resized.add(new_count - 1) = temp;
+                ptr::copy(
+                    entries.add(index + 1),
+                    entries.add(index),
+                    new_count - index,
+                );
             }
+            *entries.add(new_count) = ptr::null_mut();
+            (*content).count = new_count as c_uint;
         }
     } else {
         unsafe {
             exif_mem_free_impl(content_mem(content), entries.cast());
             (*content).entries = ptr::null_mut();
             (*content).count = 0;
+            (*content_private(content)).entry_capacity = 0;
         }
     }
 
@@ -359,8 +395,7 @@ pub(crate) unsafe fn exif_content_fix_impl(content: *mut ExifContent) {
         if tag_entry.name.is_none() {
             break;
         }
-        let support =
-            unsafe { exif_tag_get_support_level_in_ifd(tag_entry.tag, ifd, data_type) };
+        let support = unsafe { exif_tag_get_support_level_in_ifd(tag_entry.tag, ifd, data_type) };
         if support != EXIF_SUPPORT_LEVEL_MANDATORY {
             continue;
         }
@@ -411,7 +446,9 @@ pub unsafe extern "C" fn exif_content_new() -> *mut ExifContent {
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn exif_content_new_mem(mem: *mut ExifMem) -> *mut ExifContent {
-    panic_boundary::call_or(ptr::null_mut(), || unsafe { exif_content_new_mem_impl(mem) })
+    panic_boundary::call_or(ptr::null_mut(), || unsafe {
+        exif_content_new_mem_impl(mem)
+    })
 }
 
 #[unsafe(no_mangle)]
@@ -447,7 +484,9 @@ pub unsafe extern "C" fn exif_content_get_entry(
     content: *mut ExifContent,
     tag: ExifTag,
 ) -> *mut ExifEntry {
-    panic_boundary::call_or(ptr::null_mut(), || unsafe { exif_content_get_entry_impl(content, tag) })
+    panic_boundary::call_or(ptr::null_mut(), || unsafe {
+        exif_content_get_entry_impl(content, tag)
+    })
 }
 
 #[unsafe(no_mangle)]
@@ -468,7 +507,9 @@ pub unsafe extern "C" fn exif_content_foreach_entry(
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn exif_content_get_ifd(content: *mut ExifContent) -> ExifIfd {
-    panic_boundary::call_or(EXIF_IFD_COUNT, || unsafe { exif_content_get_ifd_impl(content) })
+    panic_boundary::call_or(EXIF_IFD_COUNT, || unsafe {
+        exif_content_get_ifd_impl(content)
+    })
 }
 
 #[unsafe(no_mangle)]

@@ -7,9 +7,9 @@ use std::ffi::CStr;
 use crate::ffi::panic_boundary;
 use crate::ffi::types::*;
 use crate::object::content::{
-    exif_content_dump_impl, exif_content_fix_impl, exif_content_foreach_entry_impl,
-    exif_content_get_ifd_impl, exif_content_log_impl, exif_content_new_mem_impl,
-    exif_content_remove_entry_impl, exif_content_unref_impl,
+    exif_content_dump_impl, exif_content_fix_impl, exif_content_get_ifd_impl,
+    exif_content_log_impl, exif_content_new_mem_impl, exif_content_remove_entry_impl,
+    exif_content_unref_impl,
 };
 use crate::runtime::cstdio::print_line;
 use crate::runtime::log::{exif_log_ref_impl, exif_log_unref_impl};
@@ -326,29 +326,6 @@ pub(crate) unsafe fn exif_data_foreach_content_impl(
     }
 }
 
-unsafe extern "C" fn entry_set_byte_order_callback(entry: *mut ExifEntry, data: *mut c_void) {
-    if entry.is_null() || data.is_null() {
-        return;
-    }
-
-    let change = unsafe { &*(data.cast::<ByteOrderChangeData>()) };
-    unsafe {
-        crate::primitives::utils::exif_array_set_byte_order(
-            (*entry).format,
-            (*entry).data,
-            (*entry).components as c_uint,
-            change.old,
-            change.new,
-        );
-    }
-}
-
-unsafe extern "C" fn content_set_byte_order_callback(content: *mut ExifContent, data: *mut c_void) {
-    unsafe {
-        exif_content_foreach_entry_impl(content, Some(entry_set_byte_order_callback), data);
-    }
-}
-
 pub(crate) unsafe fn exif_data_set_byte_order_impl(data: *mut ExifData, order: ExifByteOrder) {
     if data.is_null() || unsafe { (*data).priv_ }.is_null() {
         return;
@@ -359,16 +336,38 @@ pub(crate) unsafe fn exif_data_set_byte_order_impl(data: *mut ExifData, order: E
         return;
     }
 
-    let mut change = ByteOrderChangeData {
+    let change = ByteOrderChangeData {
         old: unsafe { (*private).order },
         new: order,
     };
     unsafe {
-        exif_data_foreach_content_impl(
-            data,
-            Some(content_set_byte_order_callback),
-            (&mut change as *mut ByteOrderChangeData).cast(),
-        );
+        for ifd in 0..EXIF_IFD_COUNT as usize {
+            let content = (*data).ifd[ifd];
+            if content.is_null() {
+                continue;
+            }
+
+            let entries = (*content).entries;
+            let count = (*content).count as usize;
+            if entries.is_null() || count == 0 {
+                continue;
+            }
+
+            for index in 0..count {
+                let entry = *entries.add(index);
+                if entry.is_null() {
+                    continue;
+                }
+
+                crate::primitives::utils::exif_array_set_byte_order(
+                    (*entry).format,
+                    (*entry).data,
+                    (*entry).components as c_uint,
+                    change.old,
+                    change.new,
+                );
+            }
+        }
         (*private).order = order;
         if !(*private).md.is_null() {
             crate::exif_mnote_data_set_byte_order((*private).md, order);
@@ -428,7 +427,9 @@ unsafe extern "C" fn fix_content_callback(content: *mut ExifContent, _data: *mut
 
     match unsafe { exif_content_get_ifd_impl(content) } {
         EXIF_IFD_1 => {
-            if !unsafe { (*content).parent }.is_null() && !unsafe { (*(*content).parent).data }.is_null() {
+            if !unsafe { (*content).parent }.is_null()
+                && !unsafe { (*(*content).parent).data }.is_null()
+            {
                 unsafe { exif_content_fix_impl(content) };
             } else {
                 while unsafe { (*content).count } > 0 {
@@ -468,9 +469,7 @@ pub(crate) unsafe fn exif_data_dump_impl(data: *mut ExifData) {
             let name = if name_ptr.is_null() {
                 ""
             } else {
-                unsafe { CStr::from_ptr(name_ptr) }
-                    .to_str()
-                    .unwrap_or("")
+                unsafe { CStr::from_ptr(name_ptr) }.to_str().unwrap_or("")
             };
             print_line(&format!("Dumping IFD '{}'...", name));
             unsafe { exif_content_dump_impl(content, 0) };
@@ -506,7 +505,9 @@ pub unsafe extern "C" fn exif_data_new_from_data(
     source: *const c_uchar,
     size: c_uint,
 ) -> *mut ExifData {
-    panic_boundary::call_or(ptr::null_mut(), || unsafe { exif_data_new_from_data_impl(source, size) })
+    panic_boundary::call_or(ptr::null_mut(), || unsafe {
+        exif_data_new_from_data_impl(source, size)
+    })
 }
 
 #[unsafe(no_mangle)]
@@ -538,7 +539,9 @@ pub unsafe extern "C" fn exif_data_set_byte_order(data: *mut ExifData, order: Ex
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn exif_data_get_mnote_data(data: *mut ExifData) -> *mut ExifMnoteData {
-    panic_boundary::call_or(ptr::null_mut(), || unsafe { exif_data_get_mnote_data_impl(data) })
+    panic_boundary::call_or(ptr::null_mut(), || unsafe {
+        exif_data_get_mnote_data_impl(data)
+    })
 }
 
 #[unsafe(no_mangle)]

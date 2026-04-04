@@ -5,10 +5,13 @@ use core::ptr;
 use std::ffi::CStr;
 use std::fs::File;
 use std::io::Read;
+#[cfg(unix)]
+use std::os::unix::ffi::OsStrExt;
+use std::path::Path;
 
 use crate::ffi::panic_boundary;
 use crate::ffi::types::{
-    ExifData, ExifLoader, ExifLog, ExifMem, ExifLong, EXIF_LOG_CODE_CORRUPT_DATA,
+    ExifData, ExifLoader, ExifLog, ExifLong, ExifMem, EXIF_LOG_CODE_CORRUPT_DATA,
 };
 use crate::object::data::exif_data_new_mem_impl;
 use crate::parser::data_load::exif_data_load_data_impl;
@@ -113,7 +116,11 @@ unsafe fn loader_copy(loader: *mut ExifLoader, buffer: *mut c_uchar, len: c_uint
         loader.bytes_read = loader.bytes_read.saturating_add(copy_len);
     }
 
-    if loader.bytes_read >= loader.size { 0 } else { 1 }
+    if loader.bytes_read >= loader.size {
+        0
+    } else {
+        1
+    }
 }
 
 fn matches_known_exif_prefix(window: &[u8], start: usize) -> bool {
@@ -277,16 +284,9 @@ pub(crate) unsafe fn exif_loader_write_impl(
                         loader_ref.size = 0;
                         loader_ref.state = LoaderState::ReadSizeByte08;
                     }
-                    JPEG_MARKER_DCT
-                    | JPEG_MARKER_DHT
-                    | JPEG_MARKER_DQT
-                    | JPEG_MARKER_APP0
-                    | JPEG_MARKER_APP2
-                    | JPEG_MARKER_APP4
-                    | JPEG_MARKER_APP5
-                    | JPEG_MARKER_APP11
-                    | JPEG_MARKER_APP13
-                    | JPEG_MARKER_APP14
+                    JPEG_MARKER_DCT | JPEG_MARKER_DHT | JPEG_MARKER_DQT | JPEG_MARKER_APP0
+                    | JPEG_MARKER_APP2 | JPEG_MARKER_APP4 | JPEG_MARKER_APP5
+                    | JPEG_MARKER_APP11 | JPEG_MARKER_APP13 | JPEG_MARKER_APP14
                     | JPEG_MARKER_COM => {
                         loader_ref.data_format = LoaderDataFormat::Jpeg;
                         loader_ref.size = 0;
@@ -317,7 +317,8 @@ pub(crate) unsafe fn exif_loader_new_mem_impl(mem: *mut ExifMem) -> *mut ExifLoa
         return ptr::null_mut();
     }
 
-    let loader = unsafe { exif_mem_alloc_impl(mem, size_of::<Loader>() as ExifLong) }.cast::<Loader>();
+    let loader =
+        unsafe { exif_mem_alloc_impl(mem, size_of::<Loader>() as ExifLong) }.cast::<Loader>();
     if loader.is_null() {
         return ptr::null_mut();
     }
@@ -400,12 +401,22 @@ pub(crate) unsafe fn exif_loader_write_file_impl(loader: *mut ExifLoader, path: 
         return;
     }
 
-    let path = unsafe { CStr::from_ptr(path) }.to_string_lossy().into_owned();
-    let Ok(mut file) = File::open(&path) else {
+    #[cfg(unix)]
+    let Ok(mut file) = File::open(Path::new(std::ffi::OsStr::from_bytes(unsafe {
+        CStr::from_ptr(path).to_bytes()
+    }))) else {
+        return;
+    };
+    #[cfg(not(unix))]
+    let Ok(mut file) = File::open(
+        unsafe { CStr::from_ptr(path) }
+            .to_string_lossy()
+            .into_owned(),
+    ) else {
         return;
     };
 
-    let mut chunk = [0u8; 1024];
+    let mut chunk = [0u8; 8192];
     loop {
         let Ok(read) = file.read(&mut chunk) else {
             break;
@@ -512,7 +523,9 @@ pub unsafe extern "C" fn exif_loader_write(
     buffer: *mut c_uchar,
     size: c_uint,
 ) -> c_uchar {
-    panic_boundary::call_or(0, || unsafe { exif_loader_write_impl(loader, buffer, size) })
+    panic_boundary::call_or(0, || unsafe {
+        exif_loader_write_impl(loader, buffer, size)
+    })
 }
 
 #[unsafe(no_mangle)]
@@ -522,7 +535,9 @@ pub unsafe extern "C" fn exif_loader_reset(loader: *mut ExifLoader) {
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn exif_loader_get_data(loader: *mut ExifLoader) -> *mut ExifData {
-    panic_boundary::call_or(ptr::null_mut(), || unsafe { exif_loader_get_data_impl(loader) })
+    panic_boundary::call_or(ptr::null_mut(), || unsafe {
+        exif_loader_get_data_impl(loader)
+    })
 }
 
 #[unsafe(no_mangle)]

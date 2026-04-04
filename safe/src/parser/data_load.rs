@@ -5,13 +5,13 @@ use core::slice;
 use crate::ffi::panic_boundary;
 use crate::ffi::types::{
     ExifByteOrder, ExifData, ExifEntry, ExifIfd, ExifLong, ExifTag, EXIF_BYTE_ORDER_INTEL,
-    EXIF_BYTE_ORDER_MOTOROLA, EXIF_IFD_0, EXIF_IFD_1, EXIF_IFD_COUNT, EXIF_IFD_EXIF,
-    EXIF_IFD_GPS, EXIF_IFD_INTEROPERABILITY,
+    EXIF_BYTE_ORDER_MOTOROLA, EXIF_IFD_0, EXIF_IFD_1, EXIF_IFD_COUNT, EXIF_IFD_EXIF, EXIF_IFD_GPS,
+    EXIF_IFD_INTEROPERABILITY,
 };
-use crate::object::content::exif_content_add_entry_impl;
+use crate::object::content::{exif_content_add_entry_impl, exif_content_reserve_entries_impl};
 use crate::object::data::{
-    exif_data_fix_impl, exif_data_get_mem_impl, exif_data_get_options_impl,
-    exif_data_reset_impl, exif_data_set_byte_order_impl, exif_data_set_mnote_offset_impl,
+    exif_data_fix_impl, exif_data_get_mem_impl, exif_data_get_options_impl, exif_data_reset_impl,
+    exif_data_set_byte_order_impl, exif_data_set_mnote_offset_impl,
 };
 use crate::object::entry::{exif_entry_new_mem_impl, exif_entry_unref_impl};
 use crate::parser::limits::{
@@ -172,8 +172,10 @@ fn load_thumbnail(
 ) -> Result<(), ParseError> {
     let data = ctx.data;
     let thumbnail = slice_range(tiff, offset, len, "Thumbnail extends past end of buffer")?;
-    ctx.budget
-        .charge_work(len.saturating_div(16).saturating_add(1), "EXIF parse-work budget exhausted")?;
+    ctx.budget.charge_work(
+        len.saturating_div(16).saturating_add(1),
+        "EXIF parse-work budget exhausted",
+    )?;
 
     unsafe {
         if !(*data).data.is_null() {
@@ -187,7 +189,9 @@ fn load_thumbnail(
         exif_mem_alloc_impl(exif_data_get_mem_impl(data), len as ExifLong).cast::<c_uchar>()
     };
     if dest.is_null() {
-        return Err(ParseError::ResourceLimit("Out of memory allocating thumbnail"));
+        return Err(ParseError::ResourceLimit(
+            "Out of memory allocating thumbnail",
+        ));
     }
 
     unsafe {
@@ -202,8 +206,8 @@ fn load_entry(
     ctx: &mut LoadContext,
     tiff: &[u8],
     entry_offset: usize,
+    tag: ExifTag,
 ) -> Result<Option<*mut ExifEntry>, ParseError> {
-    let tag = read_short(tiff, entry_offset, ctx.order)? as ExifTag;
     let format = read_short(tiff, entry_offset + 2, ctx.order)? as i32;
     let components = read_long(tiff, entry_offset + 4, ctx.order)? as usize;
     let format_size = exif_format_get_size_impl(format) as usize;
@@ -217,7 +221,12 @@ fn load_entry(
     } else {
         entry_offset + 8
     };
-    let raw = slice_range(tiff, data_offset, data_size, "EXIF entry extends past end of buffer")?;
+    let raw = slice_range(
+        tiff,
+        data_offset,
+        data_size,
+        "EXIF entry extends past end of buffer",
+    )?;
 
     ctx.budget.charge_work(
         data_size.saturating_div(16).saturating_add(1),
@@ -226,11 +235,14 @@ fn load_entry(
 
     let entry = unsafe { exif_entry_new_mem_impl(exif_data_get_mem_impl(ctx.data)) };
     if entry.is_null() {
-        return Err(ParseError::ResourceLimit("Out of memory allocating EXIF entry"));
+        return Err(ParseError::ResourceLimit(
+            "Out of memory allocating EXIF entry",
+        ));
     }
 
     let entry_data = unsafe {
-        exif_mem_alloc_impl(exif_data_get_mem_impl(ctx.data), data_size as ExifLong).cast::<c_uchar>()
+        exif_mem_alloc_impl(exif_data_get_mem_impl(ctx.data), data_size as ExifLong)
+            .cast::<c_uchar>()
     };
     if entry_data.is_null() {
         unsafe { exif_entry_unref_impl(entry) };
@@ -278,13 +290,22 @@ fn parse_ifd(
 
     let entries_offset = checked_add(offset, 2, "IFD entry table overflow")?;
     if entries_offset > tiff.len() {
-        return Err(ParseError::Corrupt("IFD entry table starts past end of buffer"));
+        return Err(ParseError::Corrupt(
+            "IFD entry table starts past end of buffer",
+        ));
     }
 
     let available_bytes = tiff.len() - entries_offset;
     let available_entries = available_bytes / 12;
     let entry_count = declared_entries.min(available_entries);
     let content = unsafe { (*ctx.data).ifd[index] };
+    let ignore_unknown = (unsafe { exif_data_get_options_impl(ctx.data) }
+        & crate::ffi::types::EXIF_DATA_OPTION_IGNORE_UNKNOWN_TAGS)
+        != 0;
+
+    unsafe {
+        exif_content_reserve_entries_impl(content, entry_count);
+    }
 
     let mut thumbnail_offset = None;
     let mut thumbnail_length = None;
@@ -340,15 +361,12 @@ fn parse_ifd(
                     if prefix == [0, 0, 0, 0] {
                         continue;
                     }
-                    if (unsafe { exif_data_get_options_impl(ctx.data) }
-                        & crate::ffi::types::EXIF_DATA_OPTION_IGNORE_UNKNOWN_TAGS)
-                        != 0
-                    {
+                    if ignore_unknown {
                         continue;
                     }
                 }
 
-                if let Some(entry) = load_entry(ctx, tiff, entry_offset)? {
+                if let Some(entry) = load_entry(ctx, tiff, entry_offset, tag)? {
                     unsafe {
                         exif_content_add_entry_impl(content, entry);
                         exif_entry_unref_impl(entry);
@@ -472,5 +490,7 @@ pub unsafe extern "C" fn exif_data_load_data(
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn exif_data_new_from_file(path: *const c_char) -> *mut ExifData {
-    panic_boundary::call_or(ptr::null_mut(), || unsafe { exif_data_new_from_file_impl(path) })
+    panic_boundary::call_or(ptr::null_mut(), || unsafe {
+        exif_data_new_from_file_impl(path)
+    })
 }

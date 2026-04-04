@@ -17,8 +17,12 @@ fn get_sshort_impl(buffer: *const c_uchar, order: ExifByteOrder) -> ExifSShort {
 
     unsafe {
         match order {
-            EXIF_BYTE_ORDER_MOTOROLA => (((*buffer as u16) << 8) | *buffer.add(1) as u16) as ExifSShort,
-            EXIF_BYTE_ORDER_INTEL => (((*buffer.add(1) as u16) << 8) | *buffer as u16) as ExifSShort,
+            EXIF_BYTE_ORDER_MOTOROLA => {
+                (((*buffer as u16) << 8) | *buffer.add(1) as u16) as ExifSShort
+            }
+            EXIF_BYTE_ORDER_INTEL => {
+                (((*buffer.add(1) as u16) << 8) | *buffer as u16) as ExifSShort
+            }
             _ => 0,
         }
     }
@@ -218,7 +222,11 @@ pub unsafe extern "C" fn exif_set_rational(
             return;
         }
         set_slong_impl(buffer, order, value.numerator as ExifSLong);
-        set_slong_impl(unsafe { buffer.add(4) }, order, value.denominator as ExifSLong);
+        set_slong_impl(
+            unsafe { buffer.add(4) },
+            order,
+            value.denominator as ExifSLong,
+        );
     });
 }
 
@@ -232,7 +240,19 @@ pub unsafe extern "C" fn exif_array_set_byte_order(
 ) {
     panic_boundary::call_void(|| {
         let field_size = exif_format_get_size_impl(format) as usize;
-        if buffer.is_null() || count == 0 || field_size == 0 {
+        if buffer.is_null()
+            || count == 0
+            || field_size == 0
+            || !matches!(
+                format,
+                EXIF_FORMAT_SHORT
+                    | EXIF_FORMAT_SSHORT
+                    | EXIF_FORMAT_LONG
+                    | EXIF_FORMAT_RATIONAL
+                    | EXIF_FORMAT_SLONG
+                    | EXIF_FORMAT_SRATIONAL
+            )
+        {
             return;
         }
 
@@ -254,11 +274,17 @@ pub unsafe extern "C" fn exif_array_set_byte_order(
                 EXIF_FORMAT_RATIONAL => {
                     let value = ExifRational {
                         numerator: get_slong_impl(slot.cast_const(), original_order) as ExifLong,
-                        denominator: get_slong_impl(unsafe { slot.add(4) }.cast_const(), original_order)
-                            as ExifLong,
+                        denominator: get_slong_impl(
+                            unsafe { slot.add(4) }.cast_const(),
+                            original_order,
+                        ) as ExifLong,
                     };
                     set_slong_impl(slot, new_order, value.numerator as ExifSLong);
-                    set_slong_impl(unsafe { slot.add(4) }, new_order, value.denominator as ExifSLong);
+                    set_slong_impl(
+                        unsafe { slot.add(4) },
+                        new_order,
+                        value.denominator as ExifSLong,
+                    );
                 }
                 EXIF_FORMAT_SLONG => {
                     let value = get_slong_impl(slot.cast_const(), original_order);
@@ -267,7 +293,10 @@ pub unsafe extern "C" fn exif_array_set_byte_order(
                 EXIF_FORMAT_SRATIONAL => {
                     let value = ExifSRational {
                         numerator: get_slong_impl(slot.cast_const(), original_order),
-                        denominator: get_slong_impl(unsafe { slot.add(4) }.cast_const(), original_order),
+                        denominator: get_slong_impl(
+                            unsafe { slot.add(4) }.cast_const(),
+                            original_order,
+                        ),
                     };
                     set_slong_impl(slot, new_order, value.numerator);
                     set_slong_impl(unsafe { slot.add(4) }, new_order, value.denominator);

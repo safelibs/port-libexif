@@ -13,8 +13,8 @@ use crate::object::data::exif_data_get_byte_order_impl;
 use crate::primitives::format::exif_format_get_size_impl;
 use crate::runtime::cstdio::print_line;
 use crate::runtime::mem::{
-    exif_mem_alloc_impl, exif_mem_free_impl, exif_mem_new_default_impl, exif_mem_ref_impl,
-    exif_mem_realloc_impl, exif_mem_unref_impl,
+    exif_mem_alloc_impl, exif_mem_free_impl, exif_mem_new_default_impl, exif_mem_realloc_impl,
+    exif_mem_ref_impl, exif_mem_unref_impl,
 };
 use crate::tables::gps_ifd::exif_get_gps_tag_info;
 use crate::tables::tag_table::exif_tag_get_name_in_ifd;
@@ -623,12 +623,24 @@ pub(crate) unsafe fn exif_entry_free_impl(entry: *mut ExifEntry) {
     }
 }
 
-fn get_short_convert(buffer: *const c_uchar, format: ExifFormat, order: ExifByteOrder) -> ExifShort {
+fn get_short_convert(
+    buffer: *const c_uchar,
+    format: ExifFormat,
+    order: ExifByteOrder,
+) -> ExifShort {
     match format {
-        EXIF_FORMAT_LONG => unsafe { crate::primitives::utils::exif_get_long(buffer, order) as ExifShort },
-        EXIF_FORMAT_SLONG => unsafe { crate::primitives::utils::exif_get_slong(buffer, order) as ExifShort },
-        EXIF_FORMAT_SHORT => unsafe { crate::primitives::utils::exif_get_short(buffer, order) as ExifShort },
-        EXIF_FORMAT_SSHORT => unsafe { crate::primitives::utils::exif_get_sshort(buffer, order) as ExifShort },
+        EXIF_FORMAT_LONG => unsafe {
+            crate::primitives::utils::exif_get_long(buffer, order) as ExifShort
+        },
+        EXIF_FORMAT_SLONG => unsafe {
+            crate::primitives::utils::exif_get_slong(buffer, order) as ExifShort
+        },
+        EXIF_FORMAT_SHORT => unsafe {
+            crate::primitives::utils::exif_get_short(buffer, order) as ExifShort
+        },
+        EXIF_FORMAT_SSHORT => unsafe {
+            crate::primitives::utils::exif_get_sshort(buffer, order) as ExifShort
+        },
         EXIF_FORMAT_BYTE | EXIF_FORMAT_SBYTE => {
             if buffer.is_null() {
                 0
@@ -663,16 +675,14 @@ pub(crate) unsafe fn exif_entry_fix_impl(entry: *mut ExifEntry) {
         | EXIF_TAG_CONTRAST
         | EXIF_TAG_SHARPNESS
         | EXIF_TAG_ISO_SPEED_RATINGS => match unsafe { (*entry).format } {
-            EXIF_FORMAT_LONG
-            | EXIF_FORMAT_SLONG
-            | EXIF_FORMAT_BYTE
-            | EXIF_FORMAT_SBYTE
+            EXIF_FORMAT_LONG | EXIF_FORMAT_SLONG | EXIF_FORMAT_BYTE | EXIF_FORMAT_SBYTE
             | EXIF_FORMAT_SSHORT => {
-                if unsafe { (*entry).parent }.is_null() || unsafe { (*(*entry).parent).parent }.is_null() {
+                if unsafe { (*entry).parent }.is_null()
+                    || unsafe { (*(*entry).parent).parent }.is_null()
+                {
                     return;
                 }
-                let order =
-                    unsafe { exif_data_get_byte_order_impl((*(*entry).parent).parent) };
+                let order = unsafe { exif_data_get_byte_order_impl((*(*entry).parent).parent) };
                 let new_size = unsafe { (*entry).components as usize }
                     .saturating_mul(exif_format_get_size_impl(EXIF_FORMAT_SHORT) as usize);
                 let new_data = unsafe { entry_alloc(entry, new_size as c_uint) };
@@ -687,7 +697,8 @@ pub(crate) unsafe fn exif_entry_fix_impl(entry: *mut ExifEntry) {
                     };
                     unsafe {
                         crate::primitives::utils::exif_set_short(
-                            new_data.add(index * exif_format_get_size_impl(EXIF_FORMAT_SHORT) as usize),
+                            new_data
+                                .add(index * exif_format_get_size_impl(EXIF_FORMAT_SHORT) as usize),
                             order,
                             get_short_convert(source.cast_const(), (*entry).format, order),
                         );
@@ -714,7 +725,12 @@ pub(crate) unsafe fn exif_entry_fix_impl(entry: *mut ExifEntry) {
                 for index in 0..unsafe { (*entry).components as usize } {
                     let sr = unsafe {
                         crate::primitives::utils::exif_get_srational(
-                            (*entry).data.add(index * exif_format_get_size_impl(EXIF_FORMAT_SRATIONAL) as usize)
+                            (*entry)
+                                .data
+                                .add(
+                                    index
+                                        * exif_format_get_size_impl(EXIF_FORMAT_SRATIONAL) as usize,
+                                )
                                 .cast_const(),
                             order,
                         )
@@ -725,7 +741,9 @@ pub(crate) unsafe fn exif_entry_fix_impl(entry: *mut ExifEntry) {
                     };
                     unsafe {
                         crate::primitives::utils::exif_set_rational(
-                            (*entry).data.add(index * exif_format_get_size_impl(EXIF_FORMAT_RATIONAL) as usize),
+                            (*entry).data.add(
+                                index * exif_format_get_size_impl(EXIF_FORMAT_RATIONAL) as usize,
+                            ),
                             order,
                             r,
                         );
@@ -745,7 +763,12 @@ pub(crate) unsafe fn exif_entry_fix_impl(entry: *mut ExifEntry) {
                 for index in 0..unsafe { (*entry).components as usize } {
                     let r = unsafe {
                         crate::primitives::utils::exif_get_rational(
-                            (*entry).data.add(index * exif_format_get_size_impl(EXIF_FORMAT_RATIONAL) as usize)
+                            (*entry)
+                                .data
+                                .add(
+                                    index
+                                        * exif_format_get_size_impl(EXIF_FORMAT_RATIONAL) as usize,
+                                )
                                 .cast_const(),
                             order,
                         )
@@ -756,7 +779,9 @@ pub(crate) unsafe fn exif_entry_fix_impl(entry: *mut ExifEntry) {
                     };
                     unsafe {
                         crate::primitives::utils::exif_set_srational(
-                            (*entry).data.add(index * exif_format_get_size_impl(EXIF_FORMAT_SRATIONAL) as usize),
+                            (*entry).data.add(
+                                index * exif_format_get_size_impl(EXIF_FORMAT_SRATIONAL) as usize,
+                            ),
                             order,
                             sr,
                         );
@@ -774,7 +799,10 @@ pub(crate) unsafe fn exif_entry_fix_impl(entry: *mut ExifEntry) {
                 }
             }
 
-            if unsafe { (*entry).size } >= 8 && !unsafe { (*entry).data }.is_null() && unsafe { *(*entry).data } == 0 {
+            if unsafe { (*entry).size } >= 8
+                && !unsafe { (*entry).data }.is_null()
+                && unsafe { *(*entry).data } == 0
+            {
                 unsafe {
                     ptr::copy_nonoverlapping(b"\0\0\0\0\0\0\0\0".as_ptr(), (*entry).data, 8);
                 }
@@ -790,11 +818,7 @@ pub(crate) unsafe fn exif_entry_fix_impl(entry: *mut ExifEntry) {
                     return;
                 }
                 unsafe {
-                    ptr::copy(
-                        (*entry).data,
-                        (*entry).data.add(8),
-                        old_size as usize,
-                    );
+                    ptr::copy((*entry).data, (*entry).data.add(8), old_size as usize);
                     ptr::copy_nonoverlapping(b"ASCII\0\0\0".as_ptr(), (*entry).data, 8);
                     (*entry).size += 8;
                     (*entry).components += 8;
@@ -803,9 +827,7 @@ pub(crate) unsafe fn exif_entry_fix_impl(entry: *mut ExifEntry) {
             }
 
             if !unsafe { (*entry).data }.is_null() {
-                let bytes = unsafe {
-                    slice::from_raw_parts((*entry).data, (*entry).size as usize)
-                };
+                let bytes = unsafe { slice::from_raw_parts((*entry).data, (*entry).size as usize) };
                 let mut index = 0usize;
                 while index < bytes.len() && bytes[index] == 0 {
                     index += 1;
@@ -837,11 +859,7 @@ pub(crate) unsafe fn exif_entry_fix_impl(entry: *mut ExifEntry) {
                         return;
                     }
                     unsafe {
-                        ptr::copy(
-                            (*entry).data,
-                            (*entry).data.add(8),
-                            old_size as usize,
-                        );
+                        ptr::copy((*entry).data, (*entry).data.add(8), old_size as usize);
                         ptr::copy_nonoverlapping(b"ASCII\0\0\0".as_ptr(), (*entry).data, 8);
                         (*entry).size += 8;
                         (*entry).components += 8;
@@ -916,7 +934,11 @@ unsafe fn initialize_gps_entry(entry: *mut ExifEntry, tag: ExifTag) {
             return;
         }
         if let Some(default_value) = info.default_value {
-            ptr::copy_nonoverlapping(default_value.as_ptr(), (*entry).data, info.default_size as usize);
+            ptr::copy_nonoverlapping(
+                default_value.as_ptr(),
+                (*entry).data,
+                info.default_size as usize,
+            );
         }
     }
 }
@@ -979,7 +1001,9 @@ pub(crate) unsafe fn exif_entry_initialize_impl(entry: *mut ExifEntry, tag: Exif
                 return;
             }
             let default = match tag {
-                EXIF_TAG_ORIENTATION | EXIF_TAG_PLANAR_CONFIGURATION | EXIF_TAG_YCBCR_POSITIONING => 1,
+                EXIF_TAG_ORIENTATION
+                | EXIF_TAG_PLANAR_CONFIGURATION
+                | EXIF_TAG_YCBCR_POSITIONING => 1,
                 EXIF_TAG_RESOLUTION_UNIT | EXIF_TAG_FOCAL_PLANE_RESOLUTION_UNIT => 2,
                 EXIF_TAG_SAMPLES_PER_PIXEL => 3,
                 EXIF_TAG_COLOR_SPACE => 0xffff,
@@ -1025,7 +1049,9 @@ pub(crate) unsafe fn exif_entry_initialize_impl(entry: *mut ExifEntry, tag: Exif
             for offset in 0..3usize {
                 unsafe {
                     crate::primitives::utils::exif_set_short(
-                        (*entry).data.add(offset * exif_format_get_size_impl(EXIF_FORMAT_SHORT) as usize),
+                        (*entry)
+                            .data
+                            .add(offset * exif_format_get_size_impl(EXIF_FORMAT_SHORT) as usize),
                         order,
                         8,
                     );
@@ -1040,7 +1066,9 @@ pub(crate) unsafe fn exif_entry_initialize_impl(entry: *mut ExifEntry, tag: Exif
             unsafe {
                 crate::primitives::utils::exif_set_short((*entry).data, order, 2);
                 crate::primitives::utils::exif_set_short(
-                    (*entry).data.add(exif_format_get_size_impl(EXIF_FORMAT_SHORT) as usize),
+                    (*entry)
+                        .data
+                        .add(exif_format_get_size_impl(EXIF_FORMAT_SHORT) as usize),
                     order,
                     1,
                 );
@@ -1098,7 +1126,9 @@ pub(crate) unsafe fn exif_entry_initialize_impl(entry: *mut ExifEntry, tag: Exif
             for (index, value) in values.into_iter().enumerate() {
                 unsafe {
                     crate::primitives::utils::exif_set_rational(
-                        (*entry).data.add(index * exif_format_get_size_impl(EXIF_FORMAT_RATIONAL) as usize),
+                        (*entry)
+                            .data
+                            .add(index * exif_format_get_size_impl(EXIF_FORMAT_RATIONAL) as usize),
                         order,
                         ExifRational {
                             numerator: value,
@@ -1128,13 +1158,19 @@ pub(crate) unsafe fn exif_entry_initialize_impl(entry: *mut ExifEntry, tag: Exif
                 );
             }
         }
-        EXIF_TAG_SUB_SEC_TIME | EXIF_TAG_SUB_SEC_TIME_ORIGINAL | EXIF_TAG_SUB_SEC_TIME_DIGITIZED => unsafe {
+        EXIF_TAG_SUB_SEC_TIME
+        | EXIF_TAG_SUB_SEC_TIME_ORIGINAL
+        | EXIF_TAG_SUB_SEC_TIME_DIGITIZED => unsafe {
             (*entry).components = 0;
             (*entry).format = EXIF_FORMAT_ASCII;
             (*entry).size = 0;
             (*entry).data = ptr::null_mut();
         },
-        EXIF_TAG_IMAGE_DESCRIPTION | EXIF_TAG_MAKE | EXIF_TAG_MODEL | EXIF_TAG_SOFTWARE | EXIF_TAG_ARTIST => {
+        EXIF_TAG_IMAGE_DESCRIPTION
+        | EXIF_TAG_MAKE
+        | EXIF_TAG_MODEL
+        | EXIF_TAG_SOFTWARE
+        | EXIF_TAG_ARTIST => {
             let none = b"[None]\0";
             unsafe {
                 (*entry).components = none.len() as c_ulong;
@@ -1220,7 +1256,10 @@ fn bytes_to_string(bytes: &[u8]) -> String {
 }
 
 fn bytes_until_nul(bytes: &[u8]) -> &[u8] {
-    let end = bytes.iter().position(|&byte| byte == 0).unwrap_or(bytes.len());
+    let end = bytes
+        .iter()
+        .position(|&byte| byte == 0)
+        .unwrap_or(bytes.len());
     &bytes[..end]
 }
 
@@ -1247,6 +1286,10 @@ fn match_repeated_char(data: &[u8], ch: u8) -> bool {
 }
 
 fn choose_best_fit(values: &[&str], maxlen: c_uint) -> Option<String> {
+    if let Some(selected) = choose_best_fit_static(values, maxlen) {
+        return Some(selected.to_owned());
+    }
+
     let mut selected: Option<&str> = None;
     for value in values {
         let length = value.len();
@@ -1257,8 +1300,24 @@ fn choose_best_fit(values: &[&str], maxlen: c_uint) -> Option<String> {
     selected.map(ToOwned::to_owned)
 }
 
+fn choose_best_fit_static<'a>(values: &'a [&'a str], maxlen: c_uint) -> Option<&'a str> {
+    let mut selected: Option<&str> = None;
+    for value in values {
+        let length = value.len();
+        if (maxlen as usize) > length && selected.map_or(true, |current| current.len() < length) {
+            selected = Some(value);
+        }
+    }
+    selected
+}
+
 fn format_c_float_with_min_width(value: f64, decimals: usize) -> String {
-    format!("{:>width$.precision$}", value, width = 2, precision = decimals)
+    format!(
+        "{:>width$.precision$}",
+        value,
+        width = 2,
+        precision = decimals
+    )
 }
 
 fn generic_format_value(entry: *mut ExifEntry, order: ExifByteOrder) -> String {
@@ -1267,11 +1326,12 @@ fn generic_format_value(entry: *mut ExifEntry, order: ExifByteOrder) -> String {
         return String::new();
     }
 
+    let components = unsafe { (*entry).components as usize };
     match unsafe { (*entry).format } {
         EXIF_FORMAT_UNDEFINED => format!("{} bytes undefined data", unsafe { (*entry).size }),
         EXIF_FORMAT_BYTE | EXIF_FORMAT_SBYTE => {
-            let mut out = String::new();
-            for (index, byte) in bytes.iter().take(unsafe { (*entry).components as usize }).enumerate() {
+            let mut out = String::with_capacity(components.saturating_mul(6));
+            for (index, byte) in bytes.iter().take(components).enumerate() {
                 if index > 0 {
                     out.push_str(", ");
                 }
@@ -1280,8 +1340,8 @@ fn generic_format_value(entry: *mut ExifEntry, order: ExifByteOrder) -> String {
             out
         }
         EXIF_FORMAT_SHORT => {
-            let mut out = String::new();
-            for index in 0..unsafe { (*entry).components as usize } {
+            let mut out = String::with_capacity(components.saturating_mul(8));
+            for index in 0..components {
                 if index > 0 {
                     out.push_str(", ");
                 }
@@ -1299,8 +1359,8 @@ fn generic_format_value(entry: *mut ExifEntry, order: ExifByteOrder) -> String {
             out
         }
         EXIF_FORMAT_SSHORT => {
-            let mut out = String::new();
-            for index in 0..unsafe { (*entry).components as usize } {
+            let mut out = String::with_capacity(components.saturating_mul(8));
+            for index in 0..components {
                 if index > 0 {
                     out.push_str(", ");
                 }
@@ -1318,8 +1378,8 @@ fn generic_format_value(entry: *mut ExifEntry, order: ExifByteOrder) -> String {
             out
         }
         EXIF_FORMAT_LONG => {
-            let mut out = String::new();
-            for index in 0..unsafe { (*entry).components as usize } {
+            let mut out = String::with_capacity(components.saturating_mul(12));
+            for index in 0..components {
                 if index > 0 {
                     out.push_str(", ");
                 }
@@ -1337,8 +1397,8 @@ fn generic_format_value(entry: *mut ExifEntry, order: ExifByteOrder) -> String {
             out
         }
         EXIF_FORMAT_SLONG => {
-            let mut out = String::new();
-            for index in 0..unsafe { (*entry).components as usize } {
+            let mut out = String::with_capacity(components.saturating_mul(12));
+            for index in 0..components {
                 if index > 0 {
                     out.push_str(", ");
                 }
@@ -1357,8 +1417,8 @@ fn generic_format_value(entry: *mut ExifEntry, order: ExifByteOrder) -> String {
         }
         EXIF_FORMAT_ASCII => bytes_to_string(bytes_until_nul(bytes)),
         EXIF_FORMAT_RATIONAL => {
-            let mut out = String::new();
-            for index in 0..unsafe { (*entry).components as usize } {
+            let mut out = String::with_capacity(components.saturating_mul(18));
+            for index in 0..components {
                 if index > 0 {
                     out.push_str(", ");
                 }
@@ -1383,8 +1443,8 @@ fn generic_format_value(entry: *mut ExifEntry, order: ExifByteOrder) -> String {
             out
         }
         EXIF_FORMAT_SRATIONAL => {
-            let mut out = String::new();
-            for index in 0..unsafe { (*entry).components as usize } {
+            let mut out = String::with_capacity(components.saturating_mul(18));
+            for index in 0..components {
                 if index > 0 {
                     out.push_str(", ");
                 }
@@ -1412,24 +1472,48 @@ fn generic_format_value(entry: *mut ExifEntry, order: ExifByteOrder) -> String {
     }
 }
 
-fn indexed_string_value(tag: ExifTag, value: ExifShort) -> Option<String> {
+fn indexed_string_value_static(tag: ExifTag, value: ExifShort) -> Option<&'static str> {
     let table = LIST_TABLE.iter().find(|table| table.tag == tag)?;
     let string = table.strings.get(value as usize)?;
     if string.is_empty() {
-        Some(format!("Unknown value {value}"))
+        None
     } else {
-        Some((*string).to_owned())
+        Some(*string)
     }
 }
 
-fn indexed_value_value(tag: ExifTag, value: ExifShort, maxlen: c_uint) -> Option<String> {
+fn indexed_string_value(tag: ExifTag, value: ExifShort) -> Option<String> {
+    if let Some(string) = indexed_string_value_static(tag, value) {
+        Some(string.to_owned())
+    } else if LIST_TABLE.iter().any(|table| table.tag == tag) {
+        Some(format!("Unknown value {value}"))
+    } else {
+        None
+    }
+}
+
+fn indexed_value_value_static(
+    tag: ExifTag,
+    value: ExifShort,
+    maxlen: c_uint,
+) -> Option<&'static str> {
     let table = LIST2_TABLE.iter().find(|table| table.tag == tag)?;
     let entry = table.entries.iter().find(|entry| entry.index == value)?;
-    choose_best_fit(entry.values, maxlen).or_else(|| Some(value.to_string()))
+    choose_best_fit_static(entry.values, maxlen)
+}
+
+fn indexed_value_value(tag: ExifTag, value: ExifShort, maxlen: c_uint) -> Option<String> {
+    if let Some(string) = indexed_value_value_static(tag, value, maxlen) {
+        Some(string.to_owned())
+    } else {
+        let table = LIST2_TABLE.iter().find(|table| table.tag == tag)?;
+        let entry = table.entries.iter().find(|entry| entry.index == value)?;
+        choose_best_fit(entry.values, maxlen).or_else(|| Some(value.to_string()))
+    }
 }
 
 fn convert_utf16_to_utf8(bytes: &[u8]) -> String {
-    let mut out = String::new();
+    let mut out = String::with_capacity(bytes.len() / 2);
     let mut index = 0usize;
     while index + 1 < bytes.len() {
         let value = u16::from_le_bytes([bytes[index], bytes[index + 1]]);
@@ -1476,50 +1560,65 @@ fn user_comment_value(entry: *mut ExifEntry) -> String {
         return String::new();
     }
 
-    bytes[index..]
-        .iter()
-        .map(|byte| {
-            if byte.is_ascii_graphic() || *byte == b' ' {
-                *byte as char
-            } else {
-                '.'
-            }
-        })
-        .collect()
+    let mut out = String::with_capacity(bytes.len() - index);
+    for byte in &bytes[index..] {
+        out.push(if byte.is_ascii_graphic() || *byte == b' ' {
+            *byte as char
+        } else {
+            '.'
+        });
+    }
+    out
+}
+
+fn exif_version_value_static(bytes: &[u8]) -> Option<&'static str> {
+    match bytes.get(..4) {
+        Some(b"0110") => Some("Exif Version 1.1"),
+        Some(b"0120") => Some("Exif Version 1.2"),
+        Some(b"0200") => Some("Exif Version 2.0"),
+        Some(b"0210") => Some("Exif Version 2.1"),
+        Some(b"0220") => Some("Exif Version 2.2"),
+        Some(b"0221") => Some("Exif Version 2.21"),
+        Some(b"0230") => Some("Exif Version 2.3"),
+        Some(b"0231") => Some("Exif Version 2.31"),
+        Some(b"0232") => Some("Exif Version 2.32"),
+        _ => None,
+    }
 }
 
 fn exif_version_value(bytes: &[u8]) -> String {
+    exif_version_value_static(bytes)
+        .unwrap_or("Unknown Exif Version")
+        .to_owned()
+}
+
+fn flash_pix_version_value_static(bytes: &[u8]) -> Option<&'static str> {
     match bytes.get(..4) {
-        Some(b"0110") => "Exif Version 1.1".to_owned(),
-        Some(b"0120") => "Exif Version 1.2".to_owned(),
-        Some(b"0200") => "Exif Version 2.0".to_owned(),
-        Some(b"0210") => "Exif Version 2.1".to_owned(),
-        Some(b"0220") => "Exif Version 2.2".to_owned(),
-        Some(b"0221") => "Exif Version 2.21".to_owned(),
-        Some(b"0230") => "Exif Version 2.3".to_owned(),
-        Some(b"0231") => "Exif Version 2.31".to_owned(),
-        Some(b"0232") => "Exif Version 2.32".to_owned(),
-        _ => "Unknown Exif Version".to_owned(),
+        Some(b"0100") => Some("FlashPix Version 1.0"),
+        Some(b"0101") => Some("FlashPix Version 1.01"),
+        _ => None,
     }
 }
 
 fn flash_pix_version_value(bytes: &[u8]) -> String {
-    match bytes.get(..4) {
-        Some(b"0100") => "FlashPix Version 1.0".to_owned(),
-        Some(b"0101") => "FlashPix Version 1.01".to_owned(),
-        _ => "Unknown FlashPix Version".to_owned(),
-    }
+    flash_pix_version_value_static(bytes)
+        .unwrap_or("Unknown FlashPix Version")
+        .to_owned()
 }
 
 fn copyright_value(entry: *mut ExifEntry) -> String {
     let bytes = data_bytes(entry);
-    let first_end = bytes.iter().position(|&byte| byte == 0).unwrap_or(bytes.len());
+    let first_end = bytes
+        .iter()
+        .position(|&byte| byte == 0)
+        .unwrap_or(bytes.len());
     let first = &bytes[..first_end];
-    let mut out = if !first.is_empty() && !match_repeated_char(first, b' ') {
-        bytes_to_string(first)
+    let mut out = String::with_capacity(bytes.len().saturating_add(32));
+    if !first.is_empty() && !match_repeated_char(first, b' ') {
+        out.push_str(&bytes_to_string(first));
     } else {
-        "[None]".to_owned()
-    };
+        out.push_str("[None]");
+    }
     out.push_str(" (Photographer) - ");
 
     let second = if first_end < bytes.len() {
@@ -1547,14 +1646,18 @@ fn entry_value_string(entry: *mut ExifEntry, order: ExifByteOrder, maxlen: c_uin
     match unsafe { (*entry).tag } {
         EXIF_TAG_USER_COMMENT => user_comment_value(entry),
         EXIF_TAG_EXIF_VERSION => {
-            if unsafe { (*entry).format } != EXIF_FORMAT_UNDEFINED || unsafe { (*entry).components } != 4 {
+            if unsafe { (*entry).format } != EXIF_FORMAT_UNDEFINED
+                || unsafe { (*entry).components } != 4
+            {
                 String::new()
             } else {
                 exif_version_value(bytes)
             }
         }
         EXIF_TAG_FLASH_PIX_VERSION => {
-            if unsafe { (*entry).format } != EXIF_FORMAT_UNDEFINED || unsafe { (*entry).components } != 4 {
+            if unsafe { (*entry).format } != EXIF_FORMAT_UNDEFINED
+                || unsafe { (*entry).components } != 4
+            {
                 String::new()
             } else {
                 flash_pix_version_value(bytes)
@@ -1568,10 +1671,14 @@ fn entry_value_string(entry: *mut ExifEntry, order: ExifByteOrder, maxlen: c_uin
             }
         }
         EXIF_TAG_FNUMBER => {
-            if unsafe { (*entry).format } != EXIF_FORMAT_RATIONAL || unsafe { (*entry).components } != 1 {
+            if unsafe { (*entry).format } != EXIF_FORMAT_RATIONAL
+                || unsafe { (*entry).components } != 1
+            {
                 return String::new();
             }
-            let value = unsafe { crate::primitives::utils::exif_get_rational((*entry).data.cast_const(), order) };
+            let value = unsafe {
+                crate::primitives::utils::exif_get_rational((*entry).data.cast_const(), order)
+            };
             if value.denominator == 0 {
                 generic_format_value(entry, order)
             } else {
@@ -1579,10 +1686,14 @@ fn entry_value_string(entry: *mut ExifEntry, order: ExifByteOrder, maxlen: c_uin
             }
         }
         EXIF_TAG_APERTURE_VALUE | EXIF_TAG_MAX_APERTURE_VALUE => {
-            if unsafe { (*entry).format } != EXIF_FORMAT_RATIONAL || unsafe { (*entry).components } != 1 {
+            if unsafe { (*entry).format } != EXIF_FORMAT_RATIONAL
+                || unsafe { (*entry).components } != 1
+            {
                 return String::new();
             }
-            let value = unsafe { crate::primitives::utils::exif_get_rational((*entry).data.cast_const(), order) };
+            let value = unsafe {
+                crate::primitives::utils::exif_get_rational((*entry).data.cast_const(), order)
+            };
             if value.denominator == 0 || value.numerator == 0x8000_0000 {
                 generic_format_value(entry, order)
             } else {
@@ -1591,10 +1702,14 @@ fn entry_value_string(entry: *mut ExifEntry, order: ExifByteOrder, maxlen: c_uin
             }
         }
         EXIF_TAG_FOCAL_LENGTH => {
-            if unsafe { (*entry).format } != EXIF_FORMAT_RATIONAL || unsafe { (*entry).components } != 1 {
+            if unsafe { (*entry).format } != EXIF_FORMAT_RATIONAL
+                || unsafe { (*entry).components } != 1
+            {
                 return String::new();
             }
-            let value = unsafe { crate::primitives::utils::exif_get_rational((*entry).data.cast_const(), order) };
+            let value = unsafe {
+                crate::primitives::utils::exif_get_rational((*entry).data.cast_const(), order)
+            };
             if value.denominator == 0 {
                 return generic_format_value(entry, order);
             }
@@ -1636,10 +1751,14 @@ fn entry_value_string(entry: *mut ExifEntry, order: ExifByteOrder, maxlen: c_uin
             format!("{focal:.1} mm{extra}")
         }
         EXIF_TAG_SUBJECT_DISTANCE => {
-            if unsafe { (*entry).format } != EXIF_FORMAT_RATIONAL || unsafe { (*entry).components } != 1 {
+            if unsafe { (*entry).format } != EXIF_FORMAT_RATIONAL
+                || unsafe { (*entry).components } != 1
+            {
                 return String::new();
             }
-            let value = unsafe { crate::primitives::utils::exif_get_rational((*entry).data.cast_const(), order) };
+            let value = unsafe {
+                crate::primitives::utils::exif_get_rational((*entry).data.cast_const(), order)
+            };
             if value.denominator == 0 {
                 generic_format_value(entry, order)
             } else {
@@ -1647,10 +1766,14 @@ fn entry_value_string(entry: *mut ExifEntry, order: ExifByteOrder, maxlen: c_uin
             }
         }
         EXIF_TAG_EXPOSURE_TIME => {
-            if unsafe { (*entry).format } != EXIF_FORMAT_RATIONAL || unsafe { (*entry).components } != 1 {
+            if unsafe { (*entry).format } != EXIF_FORMAT_RATIONAL
+                || unsafe { (*entry).components } != 1
+            {
                 return String::new();
             }
-            let value = unsafe { crate::primitives::utils::exif_get_rational((*entry).data.cast_const(), order) };
+            let value = unsafe {
+                crate::primitives::utils::exif_get_rational((*entry).data.cast_const(), order)
+            };
             if value.denominator == 0 {
                 return generic_format_value(entry, order);
             }
@@ -1662,10 +1785,14 @@ fn entry_value_string(entry: *mut ExifEntry, order: ExifByteOrder, maxlen: c_uin
             }
         }
         EXIF_TAG_SHUTTER_SPEED_VALUE => {
-            if unsafe { (*entry).format } != EXIF_FORMAT_SRATIONAL || unsafe { (*entry).components } != 1 {
+            if unsafe { (*entry).format } != EXIF_FORMAT_SRATIONAL
+                || unsafe { (*entry).components } != 1
+            {
                 return String::new();
             }
-            let value = unsafe { crate::primitives::utils::exif_get_srational((*entry).data.cast_const(), order) };
+            let value = unsafe {
+                crate::primitives::utils::exif_get_srational((*entry).data.cast_const(), order)
+            };
             if value.denominator == 0 {
                 return generic_format_value(entry, order);
             }
@@ -1678,10 +1805,14 @@ fn entry_value_string(entry: *mut ExifEntry, order: ExifByteOrder, maxlen: c_uin
             }
         }
         EXIF_TAG_BRIGHTNESS_VALUE => {
-            if unsafe { (*entry).format } != EXIF_FORMAT_SRATIONAL || unsafe { (*entry).components } != 1 {
+            if unsafe { (*entry).format } != EXIF_FORMAT_SRATIONAL
+                || unsafe { (*entry).components } != 1
+            {
                 return String::new();
             }
-            let value = unsafe { crate::primitives::utils::exif_get_srational((*entry).data.cast_const(), order) };
+            let value = unsafe {
+                crate::primitives::utils::exif_get_srational((*entry).data.cast_const(), order)
+            };
             if value.denominator == 0 {
                 return generic_format_value(entry, order);
             }
@@ -1690,7 +1821,9 @@ fn entry_value_string(entry: *mut ExifEntry, order: ExifByteOrder, maxlen: c_uin
             format!("{ev:.2} EV ({cdm2:.2} cd/m^2)")
         }
         EXIF_TAG_FILE_SOURCE => {
-            if unsafe { (*entry).format } != EXIF_FORMAT_UNDEFINED || unsafe { (*entry).components } != 1 {
+            if unsafe { (*entry).format } != EXIF_FORMAT_UNDEFINED
+                || unsafe { (*entry).components } != 1
+            {
                 return String::new();
             }
             match bytes.first().copied().unwrap_or_default() {
@@ -1699,12 +1832,17 @@ fn entry_value_string(entry: *mut ExifEntry, order: ExifByteOrder, maxlen: c_uin
             }
         }
         EXIF_TAG_COMPONENTS_CONFIGURATION => {
-            if unsafe { (*entry).format } != EXIF_FORMAT_UNDEFINED || unsafe { (*entry).components } != 4 {
+            if unsafe { (*entry).format } != EXIF_FORMAT_UNDEFINED
+                || unsafe { (*entry).components } != 4
+            {
                 return String::new();
             }
-            let mut values = Vec::new();
-            for byte in bytes.iter().take(4) {
-                let text = match byte {
+            let mut out = String::with_capacity(16);
+            for (index, byte) in bytes.iter().take(4).enumerate() {
+                if index > 0 {
+                    out.push(' ');
+                }
+                out.push_str(match byte {
                     0 => "-",
                     1 => "Y",
                     2 => "Cb",
@@ -1713,24 +1851,32 @@ fn entry_value_string(entry: *mut ExifEntry, order: ExifByteOrder, maxlen: c_uin
                     5 => "G",
                     6 => "B",
                     _ => "Reserved",
-                };
-                values.push(text);
+                });
             }
-            values.join(" ")
+            out
         }
         EXIF_TAG_EXPOSURE_BIAS_VALUE => {
-            if unsafe { (*entry).format } != EXIF_FORMAT_SRATIONAL || unsafe { (*entry).components } != 1 {
+            if unsafe { (*entry).format } != EXIF_FORMAT_SRATIONAL
+                || unsafe { (*entry).components } != 1
+            {
                 return String::new();
             }
-            let value = unsafe { crate::primitives::utils::exif_get_srational((*entry).data.cast_const(), order) };
+            let value = unsafe {
+                crate::primitives::utils::exif_get_srational((*entry).data.cast_const(), order)
+            };
             if value.denominator == 0 {
                 generic_format_value(entry, order)
             } else {
-                format!("{:.2} EV", value.numerator as f64 / value.denominator as f64)
+                format!(
+                    "{:.2} EV",
+                    value.numerator as f64 / value.denominator as f64
+                )
             }
         }
         EXIF_TAG_SCENE_TYPE => {
-            if unsafe { (*entry).format } != EXIF_FORMAT_UNDEFINED || unsafe { (*entry).components } != 1 {
+            if unsafe { (*entry).format } != EXIF_FORMAT_UNDEFINED
+                || unsafe { (*entry).components } != 1
+            {
                 return String::new();
             }
             match bytes.first().copied().unwrap_or_default() {
@@ -1739,10 +1885,14 @@ fn entry_value_string(entry: *mut ExifEntry, order: ExifByteOrder, maxlen: c_uin
             }
         }
         EXIF_TAG_YCBCR_SUB_SAMPLING => {
-            if unsafe { (*entry).format } != EXIF_FORMAT_SHORT || unsafe { (*entry).components } != 2 {
+            if unsafe { (*entry).format } != EXIF_FORMAT_SHORT
+                || unsafe { (*entry).components } != 2
+            {
                 return String::new();
             }
-            let first = unsafe { crate::primitives::utils::exif_get_short((*entry).data.cast_const(), order) };
+            let first = unsafe {
+                crate::primitives::utils::exif_get_short((*entry).data.cast_const(), order)
+            };
             let second = unsafe {
                 crate::primitives::utils::exif_get_short(
                     (*entry)
@@ -1764,7 +1914,9 @@ fn entry_value_string(entry: *mut ExifEntry, order: ExifByteOrder, maxlen: c_uin
             }
             match unsafe { (*entry).components } {
                 2 => {
-                    let x = unsafe { crate::primitives::utils::exif_get_short((*entry).data.cast_const(), order) };
+                    let x = unsafe {
+                        crate::primitives::utils::exif_get_short((*entry).data.cast_const(), order)
+                    };
                     let y = unsafe {
                         crate::primitives::utils::exif_get_short(
                             (*entry).data.add(2).cast_const(),
@@ -1774,7 +1926,9 @@ fn entry_value_string(entry: *mut ExifEntry, order: ExifByteOrder, maxlen: c_uin
                     format!("(x,y) = ({x},{y})")
                 }
                 3 => {
-                    let x = unsafe { crate::primitives::utils::exif_get_short((*entry).data.cast_const(), order) };
+                    let x = unsafe {
+                        crate::primitives::utils::exif_get_short((*entry).data.cast_const(), order)
+                    };
                     let y = unsafe {
                         crate::primitives::utils::exif_get_short(
                             (*entry).data.add(2).cast_const(),
@@ -1790,7 +1944,9 @@ fn entry_value_string(entry: *mut ExifEntry, order: ExifByteOrder, maxlen: c_uin
                     format!("Within distance {distance} of (x,y) = ({x},{y})")
                 }
                 4 => {
-                    let x = unsafe { crate::primitives::utils::exif_get_short((*entry).data.cast_const(), order) };
+                    let x = unsafe {
+                        crate::primitives::utils::exif_get_short((*entry).data.cast_const(), order)
+                    };
                     let y = unsafe {
                         crate::primitives::utils::exif_get_short(
                             (*entry).data.add(2).cast_const(),
@@ -1811,17 +1967,22 @@ fn entry_value_string(entry: *mut ExifEntry, order: ExifByteOrder, maxlen: c_uin
                     };
                     format!("Within rectangle (width {width}, height {height}) around (x,y) = ({x},{y})")
                 }
-                components => format!(
-                    "Unexpected number of components ({components}, expected 2, 3, or 4)."
-                ),
+                components => {
+                    format!("Unexpected number of components ({components}, expected 2, 3, or 4).")
+                }
             }
         }
         EXIF_TAG_GPS_VERSION_ID => {
-            if unsafe { (*entry).format } != EXIF_FORMAT_BYTE || unsafe { (*entry).components } != 4 {
+            if unsafe { (*entry).format } != EXIF_FORMAT_BYTE || unsafe { (*entry).components } != 4
+            {
                 return String::new();
             }
-            let mut out = String::new();
-            for (index, byte) in bytes.iter().take(unsafe { (*entry).components as usize }).enumerate() {
+            let mut out = String::with_capacity(15);
+            for (index, byte) in bytes
+                .iter()
+                .take(unsafe { (*entry).components as usize })
+                .enumerate()
+            {
                 if index > 0 {
                     out.push('.');
                 }
@@ -1837,7 +1998,8 @@ fn entry_value_string(entry: *mut ExifEntry, order: ExifByteOrder, maxlen: c_uin
             }
         }
         EXIF_TAG_GPS_ALTITUDE_REF => {
-            if unsafe { (*entry).format } != EXIF_FORMAT_BYTE || unsafe { (*entry).components } != 1 {
+            if unsafe { (*entry).format } != EXIF_FORMAT_BYTE || unsafe { (*entry).components } != 1
+            {
                 return String::new();
             }
             match bytes.first().copied().unwrap_or_default() {
@@ -1847,12 +2009,26 @@ fn entry_value_string(entry: *mut ExifEntry, order: ExifByteOrder, maxlen: c_uin
             }
         }
         EXIF_TAG_GPS_TIME_STAMP => {
-            if unsafe { (*entry).format } != EXIF_FORMAT_RATIONAL || unsafe { (*entry).components } != 3 {
+            if unsafe { (*entry).format } != EXIF_FORMAT_RATIONAL
+                || unsafe { (*entry).components } != 3
+            {
                 return String::new();
             }
-            let h = unsafe { crate::primitives::utils::exif_get_rational((*entry).data.cast_const(), order) };
-            let m = unsafe { crate::primitives::utils::exif_get_rational((*entry).data.add(8).cast_const(), order) };
-            let s = unsafe { crate::primitives::utils::exif_get_rational((*entry).data.add(16).cast_const(), order) };
+            let h = unsafe {
+                crate::primitives::utils::exif_get_rational((*entry).data.cast_const(), order)
+            };
+            let m = unsafe {
+                crate::primitives::utils::exif_get_rational(
+                    (*entry).data.add(8).cast_const(),
+                    order,
+                )
+            };
+            let s = unsafe {
+                crate::primitives::utils::exif_get_rational(
+                    (*entry).data.add(16).cast_const(),
+                    order,
+                )
+            };
             if h.denominator == 0 || m.denominator == 0 || s.denominator == 0 {
                 return generic_format_value(entry, order);
             }
@@ -1873,10 +2049,14 @@ fn entry_value_string(entry: *mut ExifEntry, order: ExifByteOrder, maxlen: c_uin
         | EXIF_TAG_FLASH
         | EXIF_TAG_SUBJECT_DISTANCE_RANGE
         | EXIF_TAG_COLOR_SPACE => {
-            if unsafe { (*entry).format } != EXIF_FORMAT_SHORT || unsafe { (*entry).components } != 1 {
+            if unsafe { (*entry).format } != EXIF_FORMAT_SHORT
+                || unsafe { (*entry).components } != 1
+            {
                 return String::new();
             }
-            let value = unsafe { crate::primitives::utils::exif_get_short((*entry).data.cast_const(), order) };
+            let value = unsafe {
+                crate::primitives::utils::exif_get_short((*entry).data.cast_const(), order)
+            };
             indexed_value_value(unsafe { (*entry).tag }, value, maxlen)
                 .unwrap_or_else(|| format!("Internal error (unknown value {value})"))
         }
@@ -1893,17 +2073,132 @@ fn entry_value_string(entry: *mut ExifEntry, order: ExifByteOrder, maxlen: c_uin
         | EXIF_TAG_SATURATION
         | EXIF_TAG_CONTRAST
         | EXIF_TAG_SHARPNESS => {
-            if unsafe { (*entry).format } != EXIF_FORMAT_SHORT || unsafe { (*entry).components } != 1 {
+            if unsafe { (*entry).format } != EXIF_FORMAT_SHORT
+                || unsafe { (*entry).components } != 1
+            {
                 return String::new();
             }
-            let value = unsafe { crate::primitives::utils::exif_get_short((*entry).data.cast_const(), order) };
+            let value = unsafe {
+                crate::primitives::utils::exif_get_short((*entry).data.cast_const(), order)
+            };
             indexed_string_value(unsafe { (*entry).tag }, value)
                 .unwrap_or_else(|| value.to_string())
         }
-        EXIF_TAG_XP_TITLE | EXIF_TAG_XP_COMMENT | EXIF_TAG_XP_AUTHOR | EXIF_TAG_XP_KEYWORDS | EXIF_TAG_XP_SUBJECT => {
-            convert_utf16_to_utf8(bytes)
-        }
+        EXIF_TAG_XP_TITLE | EXIF_TAG_XP_COMMENT | EXIF_TAG_XP_AUTHOR | EXIF_TAG_XP_KEYWORDS
+        | EXIF_TAG_XP_SUBJECT => convert_utf16_to_utf8(bytes),
         _ => generic_format_value(entry, order),
+    }
+}
+
+fn entry_value_static(
+    entry: *mut ExifEntry,
+    order: ExifByteOrder,
+    maxlen: c_uint,
+) -> Option<&'static str> {
+    let bytes = data_bytes(entry);
+    match unsafe { (*entry).tag } {
+        EXIF_TAG_EXIF_VERSION
+            if unsafe { (*entry).format } == EXIF_FORMAT_UNDEFINED
+                && unsafe { (*entry).components } == 4 =>
+        {
+            Some(exif_version_value_static(bytes).unwrap_or("Unknown Exif Version"))
+        }
+        EXIF_TAG_FLASH_PIX_VERSION
+            if unsafe { (*entry).format } == EXIF_FORMAT_UNDEFINED
+                && unsafe { (*entry).components } == 4 =>
+        {
+            Some(flash_pix_version_value_static(bytes).unwrap_or("Unknown FlashPix Version"))
+        }
+        EXIF_TAG_FILE_SOURCE
+            if unsafe { (*entry).format } == EXIF_FORMAT_UNDEFINED
+                && unsafe { (*entry).components } == 1 =>
+        {
+            match bytes.first().copied().unwrap_or_default() {
+                3 => Some("DSC"),
+                _ => None,
+            }
+        }
+        EXIF_TAG_SCENE_TYPE
+            if unsafe { (*entry).format } == EXIF_FORMAT_UNDEFINED
+                && unsafe { (*entry).components } == 1 =>
+        {
+            match bytes.first().copied().unwrap_or_default() {
+                1 => Some("Directly photographed"),
+                _ => None,
+            }
+        }
+        EXIF_TAG_GPS_ALTITUDE_REF
+            if unsafe { (*entry).format } == EXIF_FORMAT_BYTE
+                && unsafe { (*entry).components } == 1 =>
+        {
+            match bytes.first().copied().unwrap_or_default() {
+                0 => Some("Sea level"),
+                1 => Some("Sea level reference"),
+                _ => None,
+            }
+        }
+        EXIF_TAG_YCBCR_SUB_SAMPLING
+            if unsafe { (*entry).format } == EXIF_FORMAT_SHORT
+                && unsafe { (*entry).components } == 2 =>
+        {
+            let first = unsafe {
+                crate::primitives::utils::exif_get_short((*entry).data.cast_const(), order)
+            };
+            let second = unsafe {
+                crate::primitives::utils::exif_get_short(
+                    (*entry)
+                        .data
+                        .add(exif_format_get_size_impl(EXIF_FORMAT_SHORT) as usize)
+                        .cast_const(),
+                    order,
+                )
+            };
+            match (first, second) {
+                (2, 1) => Some("YCbCr4:2:2"),
+                (2, 2) => Some("YCbCr4:2:0"),
+                _ => None,
+            }
+        }
+        EXIF_TAG_METERING_MODE
+        | EXIF_TAG_COMPRESSION
+        | EXIF_TAG_LIGHT_SOURCE
+        | EXIF_TAG_FOCAL_PLANE_RESOLUTION_UNIT
+        | EXIF_TAG_RESOLUTION_UNIT
+        | EXIF_TAG_EXPOSURE_PROGRAM
+        | EXIF_TAG_SENSITIVITY_TYPE
+        | EXIF_TAG_FLASH
+        | EXIF_TAG_SUBJECT_DISTANCE_RANGE
+        | EXIF_TAG_COLOR_SPACE
+            if unsafe { (*entry).format } == EXIF_FORMAT_SHORT
+                && unsafe { (*entry).components } == 1 =>
+        {
+            let value = unsafe {
+                crate::primitives::utils::exif_get_short((*entry).data.cast_const(), order)
+            };
+            indexed_value_value_static(unsafe { (*entry).tag }, value, maxlen)
+        }
+        EXIF_TAG_PLANAR_CONFIGURATION
+        | EXIF_TAG_SENSING_METHOD
+        | EXIF_TAG_ORIENTATION
+        | EXIF_TAG_YCBCR_POSITIONING
+        | EXIF_TAG_PHOTOMETRIC_INTERPRETATION
+        | EXIF_TAG_CUSTOM_RENDERED
+        | EXIF_TAG_EXPOSURE_MODE
+        | EXIF_TAG_WHITE_BALANCE
+        | EXIF_TAG_SCENE_CAPTURE_TYPE
+        | EXIF_TAG_GAIN_CONTROL
+        | EXIF_TAG_SATURATION
+        | EXIF_TAG_CONTRAST
+        | EXIF_TAG_SHARPNESS
+            if unsafe { (*entry).format } == EXIF_FORMAT_SHORT
+                && unsafe { (*entry).components } == 1 =>
+        {
+            let value = unsafe {
+                crate::primitives::utils::exif_get_short((*entry).data.cast_const(), order)
+            };
+            indexed_string_value_static(unsafe { (*entry).tag }, value)
+        }
+        _ => None,
     }
 }
 
@@ -1938,8 +2233,8 @@ pub(crate) unsafe fn exif_entry_get_value_impl(
         ptr::write_bytes(value.cast::<u8>(), 0, maxlen as usize);
     }
 
-    let expected_size =
-        (unsafe { (*entry).components } as u128) * (exif_format_get_size_impl(unsafe { (*entry).format }) as u128);
+    let expected_size = (unsafe { (*entry).components } as u128)
+        * (exif_format_get_size_impl(unsafe { (*entry).format }) as u128);
     if expected_size != unsafe { (*entry).size as u128 } {
         let message = format!(
             "Invalid size of entry ({}, expected {} x {}).",
@@ -1952,6 +2247,10 @@ pub(crate) unsafe fn exif_entry_get_value_impl(
     }
 
     let order = unsafe { exif_data_get_byte_order_impl((*(*entry).parent).parent) };
+    if let Some(static_value) = entry_value_static(entry, order, maxlen) {
+        unsafe { copy_to_buffer(static_value, value, maxlen) };
+        return value.cast_const();
+    }
     let formatted = entry_value_string(entry, order, maxlen);
     unsafe { copy_to_buffer(&formatted, value, maxlen) };
     value.cast_const()
@@ -1981,7 +2280,8 @@ pub(crate) unsafe fn exif_entry_dump_impl(entry: *mut ExifEntry, indent: c_uint)
             .to_str()
             .unwrap_or("")
     };
-    let format_name_ptr = crate::primitives::format::exif_format_get_name_impl(unsafe { (*entry).format });
+    let format_name_ptr =
+        crate::primitives::format::exif_format_get_name_impl(unsafe { (*entry).format });
     let format_name = if format_name_ptr.is_null() {
         ""
     } else {
@@ -1990,13 +2290,19 @@ pub(crate) unsafe fn exif_entry_dump_impl(entry: *mut ExifEntry, indent: c_uint)
             .unwrap_or("")
     };
 
-    print_line(&format!("{prefix}Tag: 0x{:x} ('{}')", unsafe { (*entry).tag }, tag_name));
+    print_line(&format!(
+        "{prefix}Tag: 0x{:x} ('{}')",
+        unsafe { (*entry).tag },
+        tag_name
+    ));
     print_line(&format!(
         "{prefix}  Format: {} ('{}')",
         unsafe { (*entry).format },
         format_name
     ));
-    print_line(&format!("{prefix}  Components: {}", unsafe { (*entry).components }));
+    print_line(&format!("{prefix}  Components: {}", unsafe {
+        (*entry).components
+    }));
     print_line(&format!("{prefix}  Size: {}", unsafe { (*entry).size }));
     print_line(&format!("{prefix}  Value: {rendered}"));
 }

@@ -67,12 +67,24 @@ fn option_ptr(value: Option<Message>) -> *const c_char {
     value.map_or(ptr::null(), gettext)
 }
 
+fn name_ptr_in_ifd(tag: ExifTag, ifd: ExifIfd) -> *const c_char {
+    find_entry_in_ifd(tag, ifd).map_or(ptr::null(), |entry| option_ptr(entry.name))
+}
+
+fn title_ptr_in_ifd(tag: ExifTag, ifd: ExifIfd) -> *const c_char {
+    find_entry_in_ifd(tag, ifd).map_or(ptr::null(), |entry| option_ptr(entry.title))
+}
+
 fn description_ptr(entry: &TagEntry) -> *const c_char {
     match entry.description {
         Some(description) if description.is_empty() => gettext(empty_message()),
         Some(description) => gettext(description),
         None => ptr::null(),
     }
+}
+
+fn description_ptr_in_ifd(tag: ExifTag, ifd: ExifIfd) -> *const c_char {
+    find_entry_in_ifd(tag, ifd).map_or(ptr::null(), description_ptr)
 }
 
 fn get_stuff(tag: ExifTag, getter: impl Fn(ExifTag, ExifIfd) -> *const c_char) -> *const c_char {
@@ -137,9 +149,7 @@ pub unsafe extern "C" fn exif_tag_table_count() -> u32 {
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn exif_tag_table_get_tag(index: u32) -> ExifTag {
     panic_boundary::call_or(0, || {
-        TAG_TABLE
-            .get(index as usize)
-            .map_or(0, |entry| entry.tag)
+        TAG_TABLE.get(index as usize).map_or(0, |entry| entry.tag)
     })
 }
 
@@ -154,16 +164,12 @@ pub unsafe extern "C" fn exif_tag_table_get_name(index: u32) -> *const c_char {
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn exif_tag_get_name_in_ifd(tag: ExifTag, ifd: ExifIfd) -> *const c_char {
-    panic_boundary::call_or(ptr::null(), || {
-        find_entry_in_ifd(tag, ifd).map_or(ptr::null(), |entry| option_ptr(entry.name))
-    })
+    panic_boundary::call_or(ptr::null(), || name_ptr_in_ifd(tag, ifd))
 }
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn exif_tag_get_title_in_ifd(tag: ExifTag, ifd: ExifIfd) -> *const c_char {
-    panic_boundary::call_or(ptr::null(), || {
-        find_entry_in_ifd(tag, ifd).map_or(ptr::null(), |entry| option_ptr(entry.title))
-    })
+    panic_boundary::call_or(ptr::null(), || title_ptr_in_ifd(tag, ifd))
 }
 
 #[unsafe(no_mangle)]
@@ -171,30 +177,22 @@ pub unsafe extern "C" fn exif_tag_get_description_in_ifd(
     tag: ExifTag,
     ifd: ExifIfd,
 ) -> *const c_char {
-    panic_boundary::call_or(ptr::null(), || {
-        find_entry_in_ifd(tag, ifd).map_or(ptr::null(), description_ptr)
-    })
+    panic_boundary::call_or(ptr::null(), || description_ptr_in_ifd(tag, ifd))
 }
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn exif_tag_get_name(tag: ExifTag) -> *const c_char {
-    panic_boundary::call_or(ptr::null(), || get_stuff(tag, |tag, ifd| unsafe {
-        exif_tag_get_name_in_ifd(tag, ifd)
-    }))
+    panic_boundary::call_or(ptr::null(), || get_stuff(tag, name_ptr_in_ifd))
 }
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn exif_tag_get_title(tag: ExifTag) -> *const c_char {
-    panic_boundary::call_or(ptr::null(), || get_stuff(tag, |tag, ifd| unsafe {
-        exif_tag_get_title_in_ifd(tag, ifd)
-    }))
+    panic_boundary::call_or(ptr::null(), || get_stuff(tag, title_ptr_in_ifd))
 }
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn exif_tag_get_description(tag: ExifTag) -> *const c_char {
-    panic_boundary::call_or(ptr::null(), || get_stuff(tag, |tag, ifd| unsafe {
-        exif_tag_get_description_in_ifd(tag, ifd)
-    }))
+    panic_boundary::call_or(ptr::null(), || get_stuff(tag, description_ptr_in_ifd))
 }
 
 #[unsafe(no_mangle)]

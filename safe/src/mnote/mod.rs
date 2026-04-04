@@ -21,7 +21,16 @@ unsafe fn find_entry_impl(data: *mut ExifData, tag: ExifTag) -> *mut ExifEntry {
         return core::ptr::null_mut();
     }
 
+    let exif_content = unsafe { (*data).ifd[crate::ffi::types::EXIF_IFD_EXIF as usize] };
+    let exif_entry = unsafe { exif_content_get_entry_impl(exif_content, tag) };
+    if !exif_entry.is_null() {
+        return exif_entry;
+    }
+
     for ifd in 0..crate::ffi::types::EXIF_IFD_COUNT as usize {
+        if ifd == crate::ffi::types::EXIF_IFD_EXIF as usize {
+            continue;
+        }
         let content = unsafe { (*data).ifd[ifd] };
         let entry = unsafe { exif_content_get_entry_impl(content, tag) };
         if !entry.is_null() {
@@ -32,10 +41,7 @@ unsafe fn find_entry_impl(data: *mut ExifData, tag: ExifTag) -> *mut ExifEntry {
     core::ptr::null_mut()
 }
 
-unsafe fn construct_note_impl(
-    data: *mut ExifData,
-    entry: *mut ExifEntry,
-) -> *mut ExifMnoteData {
+unsafe fn construct_note_impl(data: *mut ExifData, entry: *mut ExifEntry) -> *mut ExifMnoteData {
     if data.is_null() || entry.is_null() {
         return core::ptr::null_mut();
     }
@@ -84,7 +90,10 @@ pub(crate) unsafe fn interpret_maker_note_impl(
 
     unsafe {
         crate::mnote::base::exif_mnote_data_log(note, exif_data_get_log_impl(data));
-        crate::mnote::base::exif_mnote_data_set_byte_order(note, exif_data_get_byte_order_impl(data));
+        crate::mnote::base::exif_mnote_data_set_byte_order(
+            note,
+            exif_data_get_byte_order_impl(data),
+        );
         crate::mnote::base::exif_mnote_data_set_offset(note, exif_data_get_mnote_offset_impl(data));
         crate::mnote::base::exif_mnote_data_load(note, buffer, size as c_uint);
     }

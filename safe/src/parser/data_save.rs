@@ -5,8 +5,8 @@ use core::slice;
 use crate::ffi::panic_boundary;
 use crate::ffi::types::{
     ExifByteOrder, ExifContent, ExifData, ExifEntry, ExifIfd, ExifLong, ExifTag,
-    EXIF_BYTE_ORDER_INTEL, EXIF_FORMAT_LONG, EXIF_IFD_0, EXIF_IFD_1, EXIF_IFD_EXIF,
-    EXIF_IFD_GPS, EXIF_IFD_INTEROPERABILITY,
+    EXIF_BYTE_ORDER_INTEL, EXIF_FORMAT_LONG, EXIF_IFD_0, EXIF_IFD_1, EXIF_IFD_EXIF, EXIF_IFD_GPS,
+    EXIF_IFD_INTEROPERABILITY,
 };
 use crate::object::data::{exif_data_get_byte_order_impl, exif_data_get_mem_impl};
 use crate::parser::limits::{checked_add, checked_mul, ParseError, MAX_SERIALIZED_BYTES};
@@ -39,7 +39,9 @@ fn write_long(buffer: &mut [u8], offset: usize, order: ExifByteOrder, value: u32
 
 fn ensure_len(buffer: &mut Vec<u8>, len: usize) -> Result<(), ParseError> {
     if len > MAX_SERIALIZED_BYTES {
-        return Err(ParseError::Overflow("Serialized EXIF buffer exceeds size limit"));
+        return Err(ParseError::Overflow(
+            "Serialized EXIF buffer exceeds size limit",
+        ));
     }
     if buffer.len() < len {
         buffer.resize(len, 0);
@@ -99,25 +101,52 @@ fn sort_directory_records(
     }
 }
 
-fn visible_entries(content: *mut ExifContent) -> Vec<*mut ExifEntry> {
+fn visible_entry_count(content: *mut ExifContent) -> usize {
     if content.is_null() {
-        return Vec::new();
+        return 0;
     }
 
     let count = unsafe { (*content).count as usize };
     let entries = unsafe { (*content).entries };
     if count == 0 || entries.is_null() {
-        return Vec::new();
+        return 0;
     }
 
-    let mut visible = Vec::with_capacity(count);
+    let mut visible = 0usize;
     for index in 0..count {
-        let entry = unsafe { *entries.add(index) };
-        if !entry.is_null() {
-            visible.push(entry);
+        if !unsafe { *entries.add(index) }.is_null() {
+            visible += 1;
         }
     }
     visible
+}
+
+fn append_entry_payload(
+    buffer: &mut Vec<u8>,
+    data: *const c_uchar,
+    available: usize,
+    data_size: usize,
+) -> Result<u32, ParseError> {
+    let offset = current_offset(buffer)? as u32;
+    let start = buffer.len();
+    let end = checked_add(start, data_size, "Serialized EXIF buffer overflow")?;
+    ensure_len(buffer, end)?;
+
+    if available != 0 && !data.is_null() {
+        unsafe {
+            let source = slice::from_raw_parts(data, available);
+            buffer[start..start + available].copy_from_slice(source);
+        }
+    }
+    if available < data_size {
+        buffer[start + available..end].fill(0);
+    }
+    if (data_size & 1) != 0 {
+        let padded = checked_add(buffer.len(), 1, "Serialized EXIF padding overflow")?;
+        ensure_len(buffer, padded)?;
+    }
+
+    Ok(offset)
 }
 
 fn write_raw_entry(
@@ -136,30 +165,24 @@ fn write_raw_entry(
         .map_err(|_| ParseError::Overflow("EXIF component count does not fit usize"))?;
     let format = unsafe { (*entry).format };
     let format_size = exif_format_get_size_impl(format) as usize;
-    let data_size = checked_mul(format_size, components, "EXIF entry size overflow while saving")?;
+    let data_size = checked_mul(
+        format_size,
+        components,
+        "EXIF entry size overflow while saving",
+    )?;
 
-    write_short(
-        buffer,
-        record_offset,
-        order,
-        unsafe { (*entry).tag as u16 },
-    );
+    write_short(buffer, record_offset, order, unsafe { (*entry).tag as u16 });
     write_short(buffer, record_offset + 2, order, format as u16);
     write_long(buffer, record_offset + 4, order, components as u32);
 
     if data_size > 4 {
-        let payload = if unsafe { (*entry).data }.is_null() || unsafe { (*entry).size } == 0 {
-            vec![0u8; data_size]
+        let available = if unsafe { (*entry).data }.is_null() || unsafe { (*entry).size } == 0 {
+            0
         } else {
-            let available = unsafe { (*entry).size as usize }.min(data_size);
-            let mut payload = vec![0u8; data_size];
-            unsafe {
-                let source = slice::from_raw_parts((*entry).data.cast_const(), available);
-                payload[..available].copy_from_slice(source);
-            }
-            payload
+            unsafe { (*entry).size as usize }.min(data_size)
         };
-        let data_offset = append_bytes(buffer, &payload, true)?;
+        let data_offset =
+            append_entry_payload(buffer, unsafe { (*entry).data }, available, data_size)?;
         write_long(buffer, record_offset + 8, order, data_offset);
     } else {
         buffer[record_offset + 8..record_offset + 12].fill(0);
@@ -196,7 +219,17 @@ fn save_ifd(
 ) -> Result<(), ParseError> {
     let order = unsafe { exif_data_get_byte_order_impl(data) };
     let content = unsafe { (*data).ifd[ifd_index as usize] };
-    let entries = visible_entries(content);
+    let visible_entries = visible_entry_count(content);
+    let content_count = if content.is_null() {
+        0
+    } else {
+        unsafe { (*content).count as usize }
+    };
+    let content_entries = if content.is_null() {
+        ptr::null_mut()
+    } else {
+        unsafe { (*content).entries }
+    };
 
     let mut pointer_count = 0usize;
     let mut thumbnail_count = 0usize;
@@ -224,7 +257,7 @@ fn save_ifd(
         _ => {}
     }
 
-    let entry_count = entries.len() + pointer_count + thumbnail_count;
+    let entry_count = visible_entries + pointer_count + thumbnail_count;
     if entry_count > u16::MAX as usize {
         return Err(ParseError::Overflow("Too many EXIF entries to serialize"));
     }
@@ -239,22 +272,35 @@ fn save_ifd(
         "EXIF directory size overflow",
     )?;
 
-    let directory_offset = checked_add(EXIF_HEADER.len(), offset, "EXIF directory offset overflow")?;
-    ensure_len(buffer, checked_add(directory_offset, directory_size, "EXIF directory overflow")?)?;
+    let directory_offset =
+        checked_add(EXIF_HEADER.len(), offset, "EXIF directory offset overflow")?;
+    ensure_len(
+        buffer,
+        checked_add(directory_offset, directory_size, "EXIF directory overflow")?,
+    )?;
     write_short(buffer, directory_offset, order, entry_count as u16);
 
     let entries_offset = directory_offset + 2;
     let mut cursor = 0usize;
-    for entry in entries {
-        write_raw_entry(data, order, buffer, entries_offset + cursor * 12, entry)?;
-        cursor += 1;
+    if !content_entries.is_null() {
+        for index in 0..content_count {
+            let entry = unsafe { *content_entries.add(index) };
+            if entry.is_null() {
+                continue;
+            }
+            write_raw_entry(data, order, buffer, entries_offset + cursor * 12, entry)?;
+            cursor += 1;
+        }
     }
 
     match ifd_index {
         EXIF_IFD_0 => {
             let exif_content = unsafe { (*data).ifd[EXIF_IFD_EXIF as usize] };
-            let interoperability_content = unsafe { (*data).ifd[EXIF_IFD_INTEROPERABILITY as usize] };
-            if unsafe { (*exif_content).count } != 0 || unsafe { (*interoperability_content).count } != 0 {
+            let interoperability_content =
+                unsafe { (*data).ifd[EXIF_IFD_INTEROPERABILITY as usize] };
+            if unsafe { (*exif_content).count } != 0
+                || unsafe { (*interoperability_content).count } != 0
+            {
                 let target = current_offset(buffer)? as u32;
                 write_pointer_entry(
                     order,
@@ -281,7 +327,8 @@ fn save_ifd(
             }
         }
         EXIF_IFD_EXIF => {
-            let interoperability_content = unsafe { (*data).ifd[EXIF_IFD_INTEROPERABILITY as usize] };
+            let interoperability_content =
+                unsafe { (*data).ifd[EXIF_IFD_INTEROPERABILITY as usize] };
             if unsafe { (*interoperability_content).count } != 0 {
                 let target = current_offset(buffer)? as u32;
                 write_pointer_entry(
@@ -324,7 +371,8 @@ fn save_ifd(
 
     let next_offset_pos = entries_offset + entry_count * 12;
     if ifd_index == EXIF_IFD_0
-        && (unsafe { (*(*data).ifd[EXIF_IFD_1 as usize]).count } != 0 || unsafe { (*data).size } != 0)
+        && (unsafe { (*(*data).ifd[EXIF_IFD_1 as usize]).count } != 0
+            || unsafe { (*data).size } != 0)
     {
         let target = current_offset(buffer)? as u32;
         write_long(buffer, next_offset_pos, order, target);
@@ -371,7 +419,8 @@ pub(crate) unsafe fn exif_data_save_data_impl(
     };
 
     let dest = unsafe {
-        exif_mem_alloc_impl(exif_data_get_mem_impl(data), serialized.len() as ExifLong).cast::<c_uchar>()
+        exif_mem_alloc_impl(exif_data_get_mem_impl(data), serialized.len() as ExifLong)
+            .cast::<c_uchar>()
     };
     if dest.is_null() {
         return;
