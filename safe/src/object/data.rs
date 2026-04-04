@@ -11,6 +11,7 @@ use crate::object::content::{
     exif_content_get_ifd_impl, exif_content_log_impl, exif_content_new_mem_impl,
     exif_content_remove_entry_impl, exif_content_unref_impl,
 };
+use crate::runtime::cstdio::print_line;
 use crate::runtime::log::{exif_log_ref_impl, exif_log_unref_impl};
 use crate::runtime::mem::{
     exif_mem_alloc_impl, exif_mem_free_impl, exif_mem_new_default_impl, exif_mem_ref_impl,
@@ -471,12 +472,22 @@ pub(crate) unsafe fn exif_data_dump_impl(data: *mut ExifData) {
                     .to_str()
                     .unwrap_or("")
             };
-            println!(
-                "Dumping IFD '{}'...",
-                name
-            );
+            print_line(&format!("Dumping IFD '{}'...", name));
             unsafe { exif_content_dump_impl(content, 0) };
         }
+    }
+
+    if !unsafe { (*data).data }.is_null() && unsafe { (*data).size } >= 4 {
+        let size = unsafe { (*data).size as usize };
+        let thumbnail = unsafe { std::slice::from_raw_parts((*data).data, size) };
+        print_line(&format!(
+            "{} byte(s) thumbnail data available: 0x{:02x} 0x{:02x} ... 0x{:02x} 0x{:02x}",
+            unsafe { (*data).size },
+            thumbnail[0],
+            thumbnail[1],
+            thumbnail[size - 2],
+            thumbnail[size - 1]
+        ));
     }
 }
 

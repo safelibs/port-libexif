@@ -9,6 +9,7 @@ use crate::object::entry::{
     exif_entry_fix_impl, exif_entry_initialize_impl, exif_entry_new_impl, exif_entry_ref_impl,
     exif_entry_unref_impl,
 };
+use crate::runtime::cstdio::print_line;
 use crate::runtime::log::{exif_log_ref_impl, exif_log_unref_impl};
 use crate::runtime::mem::{
     exif_mem_alloc_impl, exif_mem_free_impl, exif_mem_new_default_impl, exif_mem_ref_impl,
@@ -386,10 +387,10 @@ pub(crate) unsafe fn exif_content_dump_impl(content: *mut ExifContent, indent: c
 
     let depth = (indent as usize).saturating_mul(2);
     let prefix = " ".repeat(depth.min(1023));
-    println!(
+    print_line(&format!(
         "{prefix}Dumping exif content ({} entries)...",
         unsafe { (*content).count }
-    );
+    ));
 
     let count = unsafe { (*content).count as usize };
     let entries = unsafe { (*content).entries };

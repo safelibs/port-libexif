@@ -1,0 +1,17 @@
+test-data-content|/home/yans/code/safelibs/ported/libexif/original/test/test-data-content.o
+test-extract|/home/yans/code/safelibs/ported/libexif/original/test/test-extract.o
+test-fuzzer|/home/yans/code/safelibs/ported/libexif/original/test/test-fuzzer.o
+test-gps|/home/yans/code/safelibs/ported/libexif/original/test/test-gps.o
+test-integers|/home/yans/code/safelibs/ported/libexif/original/test/test-integers.o
+test-mem|/home/yans/code/safelibs/ported/libexif/original/test/test-mem.o
+test-mnote|/home/yans/code/safelibs/ported/libexif/original/test/test-mnote.o
+test-null|/home/yans/code/safelibs/ported/libexif/original/test/test-null.o
+test-parse-from-data|/home/yans/code/safelibs/ported/libexif/original/test/test-parse-from-data.o
+test-parse|/home/yans/code/safelibs/ported/libexif/original/test/test-parse.o
+test-sorted|/home/yans/code/safelibs/ported/libexif/original/test/test-sorted.o
+test-tagtable|/home/yans/code/safelibs/ported/libexif/original/test/test-tagtable.o
+test-value|/home/yans/code/safelibs/ported/libexif/original/test/test-value.o
+print-localedir|/home/yans/code/safelibs/ported/libexif/original/test/nls/print-localedir.o
+photographer|/home/yans/code/safelibs/ported/libexif/original/contrib/examples/photographer.o
+thumbnail|/home/yans/code/safelibs/ported/libexif/original/contrib/examples/thumbnail.o
+write-exif|/home/yans/code/safelibs/ported/libexif/original/contrib/examples/write-exif.o

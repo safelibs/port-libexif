@@ -11,11 +11,13 @@ use crate::ffi::types::*;
 use crate::object::content::exif_content_get_ifd_impl;
 use crate::object::data::exif_data_get_byte_order_impl;
 use crate::primitives::format::exif_format_get_size_impl;
-use crate::tables::gps_ifd::exif_get_gps_tag_info;
+use crate::runtime::cstdio::print_line;
 use crate::runtime::mem::{
     exif_mem_alloc_impl, exif_mem_free_impl, exif_mem_new_default_impl, exif_mem_ref_impl,
     exif_mem_realloc_impl, exif_mem_unref_impl,
 };
+use crate::tables::gps_ifd::exif_get_gps_tag_info;
+use crate::tables::tag_table::exif_tag_get_name_in_ifd;
 
 const EXIF_TAG_INTEROPERABILITY_VERSION: ExifTag = 0x0002;
 const EXIF_TAG_IMAGE_WIDTH: ExifTag = 0x0100;
@@ -1255,6 +1257,10 @@ fn choose_best_fit(values: &[&str], maxlen: c_uint) -> Option<String> {
     selected.map(ToOwned::to_owned)
 }
 
+fn format_c_float_with_min_width(value: f64, decimals: usize) -> String {
+    format!("{:>width$.precision$}", value, width = 2, precision = decimals)
+}
+
 fn generic_format_value(entry: *mut ExifEntry, order: ExifByteOrder) -> String {
     let bytes = data_bytes(entry);
     if bytes.is_empty() {
@@ -1366,12 +1372,10 @@ fn generic_format_value(entry: *mut ExifEntry, order: ExifByteOrder) -> String {
                     let decimals = ((value.denominator as f64).log10() - 0.08 + 1.0)
                         .max(0.0)
                         .floor() as usize;
-                    let _ = write!(
-                        out,
-                        "{:.*}",
+                    out.push_str(&format_c_float_with_min_width(
+                        value.numerator as f64 / value.denominator as f64,
                         decimals,
-                        value.numerator as f64 / value.denominator as f64
-                    );
+                    ));
                 } else {
                     let _ = write!(out, "{}/{}", value.numerator, value.denominator);
                 }
@@ -1394,12 +1398,10 @@ fn generic_format_value(entry: *mut ExifEntry, order: ExifByteOrder) -> String {
                     let decimals = ((value.denominator.unsigned_abs() as f64).log10() - 0.08 + 1.0)
                         .max(0.0)
                         .floor() as usize;
-                    let _ = write!(
-                        out,
-                        "{:.*}",
+                    out.push_str(&format_c_float_with_min_width(
+                        value.numerator as f64 / value.denominator as f64,
                         decimals,
-                        value.numerator as f64 / value.denominator as f64
-                    );
+                    ));
                 } else {
                     let _ = write!(out, "{}/{}", value.numerator, value.denominator);
                 }
@@ -1970,11 +1972,33 @@ pub(crate) unsafe fn exif_entry_dump_impl(entry: *mut ExifEntry, indent: c_uint)
             .to_string_lossy()
             .into_owned()
     };
-    println!("{prefix}Tag: 0x{:x}", unsafe { (*entry).tag });
-    println!("{prefix}  Format: {}", unsafe { (*entry).format });
-    println!("{prefix}  Components: {}", unsafe { (*entry).components });
-    println!("{prefix}  Size: {}", unsafe { (*entry).size });
-    println!("{prefix}  Value: {rendered}");
+    let ifd = unsafe { exif_content_get_ifd_impl((*entry).parent) };
+    let tag_name_ptr = unsafe { exif_tag_get_name_in_ifd((*entry).tag, ifd) };
+    let tag_name = if tag_name_ptr.is_null() {
+        ""
+    } else {
+        unsafe { std::ffi::CStr::from_ptr(tag_name_ptr) }
+            .to_str()
+            .unwrap_or("")
+    };
+    let format_name_ptr = crate::primitives::format::exif_format_get_name_impl(unsafe { (*entry).format });
+    let format_name = if format_name_ptr.is_null() {
+        ""
+    } else {
+        unsafe { std::ffi::CStr::from_ptr(format_name_ptr) }
+            .to_str()
+            .unwrap_or("")
+    };
+
+    print_line(&format!("{prefix}Tag: 0x{:x} ('{}')", unsafe { (*entry).tag }, tag_name));
+    print_line(&format!(
+        "{prefix}  Format: {} ('{}')",
+        unsafe { (*entry).format },
+        format_name
+    ));
+    print_line(&format!("{prefix}  Components: {}", unsafe { (*entry).components }));
+    print_line(&format!("{prefix}  Size: {}", unsafe { (*entry).size }));
+    print_line(&format!("{prefix}  Value: {rendered}"));
 }
 
 #[unsafe(no_mangle)]

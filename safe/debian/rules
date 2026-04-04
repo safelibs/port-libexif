@@ -1,0 +1,66 @@
+#!/usr/bin/make -f
+
+export DEB_BUILD_MAINT_OPTIONS = hardening=+all
+export LIBEXIF_GETTEXT_PACKAGE = libexif-12
+export LIBEXIF_LOCALEDIR = /usr/share/locale
+
+DEB_HOST_MULTIARCH ?= $(shell dpkg-architecture -qDEB_HOST_MULTIARCH)
+PACKAGE_ROOT = $(CURDIR)/debian/tmp
+LIBDIR = $(PACKAGE_ROOT)/usr/lib/$(DEB_HOST_MULTIARCH)
+PC_FILE = $(CURDIR)/libexif.pc
+REAL_LIBRARY = libexif.so.12.3.4
+
+override_dh_auto_build:
+	cargo build --manifest-path Cargo.toml --release --locked
+	sed \
+		-e 's|@prefix@|/usr|g' \
+		-e 's|@exec_prefix@|$${prefix}|g' \
+		-e 's|@libdir@|$${exec_prefix}/lib/$(DEB_HOST_MULTIARCH)|g' \
+		-e 's|@includedir@|$${prefix}/include|g' \
+		-e 's|@VERSION@|0.6.24|g' \
+		libexif.pc.in > $(PC_FILE)
+
+override_dh_auto_install:
+	rm -rf $(PACKAGE_ROOT)
+	install -d $(LIBDIR)/pkgconfig
+	install -d $(PACKAGE_ROOT)/usr/include/libexif
+	install -d $(PACKAGE_ROOT)/usr/share/doc/libexif
+	install -m 0755 target/release/libexif.so $(LIBDIR)/$(REAL_LIBRARY)
+	ln -sf $(REAL_LIBRARY) $(LIBDIR)/libexif.so.12
+	ln -sf $(REAL_LIBRARY) $(LIBDIR)/libexif.so
+	install -m 0644 target/release/libexif.a $(LIBDIR)/libexif.a
+	cp -a include/libexif/. $(PACKAGE_ROOT)/usr/include/libexif/
+	install -m 0644 $(PC_FILE) $(LIBDIR)/pkgconfig/libexif.pc
+	install -m 0644 NEWS README SECURITY.md $(PACKAGE_ROOT)/usr/share/doc/libexif/
+	cp -a doc/libexif-api.html $(PACKAGE_ROOT)/usr/share/doc/libexif/
+	set -eu; \
+	for gmo in po/*.gmo; do \
+		lang=$${gmo##*/}; \
+		lang=$${lang%.gmo}; \
+		install -d "$(PACKAGE_ROOT)/usr/share/locale/$${lang}/LC_MESSAGES"; \
+		install -m 0644 "$$gmo" \
+			"$(PACKAGE_ROOT)/usr/share/locale/$${lang}/LC_MESSAGES/libexif-12.mo"; \
+	done
+
+override_dh_auto_test:
+	:
+
+override_dh_auto_clean:
+	rm -f $(PC_FILE)
+	cargo clean --manifest-path Cargo.toml
+	rm -rf $(PACKAGE_ROOT)
+
+override_dh_installdocs-indep:
+	dh_installdocs -p libexif-doc --doc-main-package=libexif-dev -X.md5
+
+override_dh_installchangelogs:
+	dh_installchangelogs -XChangeLog
+
+override_dh_compress:
+	dh_compress -XNEWS -XREADME
+
+override_dh_installexamples-indep:
+	dh_installexamples -p libexif-doc --doc-main-package=libexif-dev
+
+%:
+	dh $@ --buildsystem=none

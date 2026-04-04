@@ -7,6 +7,8 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 const SONAME: &str = "libexif.so.12";
+const DEFAULT_GETTEXT_PACKAGE: &str = "libexif-12";
+const DEFAULT_LOCALEDIR: &str = "/usr/share/locale";
 
 fn main() -> Result<(), Box<dyn Error>> {
     println!("cargo:rerun-if-changed=build.rs");
@@ -19,6 +21,8 @@ fn main() -> Result<(), Box<dyn Error>> {
     println!("cargo:rerun-if-changed=tests/support/libexif/i18n.h");
     println!("cargo:rerun-if-changed=cshim/exif-log-shim.c");
     println!("cargo:rerun-if-changed=include/libexif/exif-log.h");
+    println!("cargo:rerun-if-env-changed=LIBEXIF_GETTEXT_PACKAGE");
+    println!("cargo:rerun-if-env-changed=LIBEXIF_LOCALEDIR");
     emit_mnote_rerun_hints();
 
     let symbols_path = Path::new("../original/libexif/libexif.sym");
@@ -28,6 +32,16 @@ fn main() -> Result<(), Box<dyn Error>> {
     let version_script = out_dir.join("libexif.map");
     fs::write(&version_script, render_version_script(&symbols))?;
     fs::write(out_dir.join("tag_table_data.rs"), render_tag_table_data()?)?;
+
+    println!(
+        "cargo:rustc-env=LIBEXIF_GETTEXT_PACKAGE={}",
+        env::var("LIBEXIF_GETTEXT_PACKAGE")
+            .unwrap_or_else(|_| DEFAULT_GETTEXT_PACKAGE.to_owned())
+    );
+    println!(
+        "cargo:rustc-env=LIBEXIF_LOCALEDIR={}",
+        env::var("LIBEXIF_LOCALEDIR").unwrap_or_else(|_| DEFAULT_LOCALEDIR.to_owned())
+    );
 
     cc::Build::new()
         .file("cshim/exif-log-shim.c")
