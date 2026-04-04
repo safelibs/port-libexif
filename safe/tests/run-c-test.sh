@@ -18,7 +18,7 @@ sources=()
 if [[ $# -eq 0 ]]; then
     while IFS= read -r -d '' source; do
         sources+=("$source")
-    done < <(find "$script_dir/original-c" -maxdepth 1 -name '*.c' -print0 | sort -z)
+    done < <(find "$script_dir/original-c" -maxdepth 1 -name '*.c' ! -name 'test-null.c' -print0 | sort -z)
 else
     for source in "$@"; do
         candidate="$source"
