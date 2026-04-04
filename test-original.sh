@@ -114,7 +114,10 @@ FIXTURE_ROOT=/tmp/libexif-fixtures
 TEST_ROOT=/tmp/libexif-dependent-tests
 FUJI_FIXTURE="$ROOT/original/test/testdata/fuji_makernote_variant_1.jpg"
 GENERATED_FIXTURE="$FIXTURE_ROOT/generated-exif.jpg"
+GPS_FIXTURE="$FIXTURE_ROOT/generated-gps.jpg"
 GPHOTO_FIXTURE_DIR="$FIXTURE_ROOT/gphoto-camera"
+EOG_PLUGIN_DIR="/usr/lib/$MULTIARCH/eog/plugins"
+RUBY_VENDORARCHDIR="$(ruby -rrbconfig -e 'print RbConfig::CONFIG["vendorarchdir"]')"
 ACTIVE_LIBEXIF=""
 ORIGINAL_RUNTIME_DEB=""
 ORIGINAL_DEV_DEB=""
@@ -214,6 +217,23 @@ assert_binary_uses_active_libexif() {
   }
 }
 
+insert_block_before_marker() {
+  local file="$1"
+  local marker="$2"
+  local block_file="$3"
+
+  awk -v block="$block_file" -v marker="$marker" '
+    index($0, marker) {
+      while ((getline line < block) > 0) {
+        print line
+      }
+      close(block)
+    }
+    { print }
+  ' "$file" >"$file.new"
+  mv "$file.new" "$file"
+}
+
 validate_dependents() {
   local expected_count actual_count matched=0
   local name
@@ -302,8 +322,207 @@ install_original_packages() {
   printf 'ACTIVE_LIBEXIF=%s\n' "$ACTIVE_LIBEXIF"
 }
 
+build_gps_fixture_writer() {
+  local output_path="$1"
+
+  cat >"$output_path" <<'EOF'
+#include <libexif/exif-data.h>
+#include <libexif/exif-utils.h>
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+static ExifEntry *init_tag(ExifData *exif, ExifIfd ifd, ExifTag tag)
+{
+	ExifEntry *entry = exif_content_get_entry(exif->ifd[ifd], tag);
+
+	if (!entry) {
+		entry = exif_entry_new();
+		if (!entry) return NULL;
+		entry->tag = tag;
+		exif_content_add_entry(exif->ifd[ifd], entry);
+		exif_entry_initialize(entry, tag);
+		exif_entry_unref(entry);
+	}
+	return entry;
+}
+
+static ExifEntry *create_tag(ExifData *exif, ExifIfd ifd, ExifTag tag,
+			     ExifFormat format, unsigned long components)
+{
+	ExifMem *mem = exif_mem_new_default();
+	ExifEntry *entry;
+	unsigned int size = components * exif_format_get_size(format);
+
+	if (!mem) return NULL;
+	entry = exif_entry_new_mem(mem);
+	if (!entry) {
+		exif_mem_unref(mem);
+		return NULL;
+	}
+	entry->data = exif_mem_alloc(mem, size);
+	if (!entry->data) {
+		exif_entry_unref(entry);
+		exif_mem_unref(mem);
+		return NULL;
+	}
+
+	memset(entry->data, 0, size);
+	entry->size = size;
+	entry->tag = tag;
+	entry->components = components;
+	entry->format = format;
+	exif_content_add_entry(exif->ifd[ifd], entry);
+	exif_mem_unref(mem);
+	exif_entry_unref(entry);
+	return entry;
+}
+
+static ExifEntry *create_ascii_tag(ExifData *exif, ExifIfd ifd, ExifTag tag,
+				   const char *value)
+{
+	ExifEntry *entry = create_tag(exif, ifd, tag, EXIF_FORMAT_ASCII,
+				      strlen(value) + 1);
+	if (!entry) return NULL;
+	memcpy(entry->data, value, strlen(value) + 1);
+	return entry;
+}
+
+static ExifEntry *create_rational_tag(ExifData *exif, ExifIfd ifd, ExifTag tag,
+				      unsigned long components,
+				      const ExifRational *values,
+				      ExifByteOrder order)
+{
+	ExifEntry *entry = create_tag(exif, ifd, tag, EXIF_FORMAT_RATIONAL,
+				      components);
+	unsigned long i;
+
+	if (!entry) return NULL;
+	for (i = 0; i < components; ++i) {
+		exif_set_rational(
+			entry->data + i * exif_format_get_size(EXIF_FORMAT_RATIONAL),
+			order, values[i]);
+	}
+	return entry;
+}
+
+static int copy_with_exif(const char *input_path, const char *output_path,
+			  ExifData *exif)
+{
+	FILE *in = NULL;
+	FILE *out = NULL;
+	unsigned char *image = NULL;
+	unsigned char *exif_data = NULL;
+	unsigned int exif_len = 0;
+	long image_size;
+	int rc = 1;
+
+	in = fopen(input_path, "rb");
+	if (!in) {
+		perror(input_path);
+		goto cleanup;
+	}
+	if (fseek(in, 0, SEEK_END) != 0) goto cleanup;
+	image_size = ftell(in);
+	if (image_size < 4) goto cleanup;
+	if (fseek(in, 0, SEEK_SET) != 0) goto cleanup;
+
+	image = malloc((size_t) image_size);
+	if (!image) goto cleanup;
+	if (fread(image, 1, (size_t) image_size, in) != (size_t) image_size)
+		goto cleanup;
+	if (image[0] != 0xff || image[1] != 0xd8) {
+		fprintf(stderr, "input is not a JPEG: %s\n", input_path);
+		goto cleanup;
+	}
+
+	exif_data_save_data(exif, &exif_data, &exif_len);
+	if (!exif_data || exif_len == 0 || exif_len + 2 > 0xffff)
+		goto cleanup;
+
+	out = fopen(output_path, "wb");
+	if (!out) {
+		perror(output_path);
+		goto cleanup;
+	}
+	fputc(0xff, out);
+	fputc(0xd8, out);
+	fputc(0xff, out);
+	fputc(0xe1, out);
+	fputc(((exif_len + 2) >> 8) & 0xff, out);
+	fputc((exif_len + 2) & 0xff, out);
+	if (fwrite(exif_data, 1, exif_len, out) != exif_len) goto cleanup;
+	if (fwrite(image + 2, 1, (size_t) image_size - 2, out) !=
+	    (size_t) image_size - 2)
+		goto cleanup;
+	rc = 0;
+
+cleanup:
+	if (in) fclose(in);
+	if (out) fclose(out);
+	free(image);
+	free(exif_data);
+	return rc;
+}
+
+int main(int argc, char **argv)
+{
+	ExifData *exif;
+	ExifEntry *entry;
+	ExifByteOrder order = EXIF_BYTE_ORDER_INTEL;
+	ExifRational latitude[3] = {{33, 1}, {26, 1}, {2736, 100}};
+	ExifRational longitude[3] = {{112, 1}, {4, 1}, {2640, 100}};
+
+	if (argc != 3) {
+		fprintf(stderr, "usage: %s INPUT.jpg OUTPUT.jpg\n", argv[0]);
+		return 2;
+	}
+
+	exif = exif_data_new();
+	if (!exif) return 1;
+	exif_data_set_option(exif, EXIF_DATA_OPTION_FOLLOW_SPECIFICATION);
+	exif_data_set_data_type(exif, EXIF_DATA_TYPE_COMPRESSED);
+	exif_data_set_byte_order(exif, order);
+	exif_data_fix(exif);
+
+	entry = init_tag(exif, EXIF_IFD_0, EXIF_TAG_ORIENTATION);
+	exif_set_short(entry->data, order, 1);
+	entry = init_tag(exif, EXIF_IFD_0, EXIF_TAG_DATE_TIME);
+	memcpy(entry->data, "2024:01:02 03:04:05", 20);
+	create_ascii_tag(exif, EXIF_IFD_0, EXIF_TAG_MODEL, "libexif-gps");
+	entry = init_tag(exif, EXIF_IFD_EXIF, EXIF_TAG_DATE_TIME_ORIGINAL);
+	memcpy(entry->data, "2024:01:02 03:04:05", 20);
+	entry = init_tag(exif, EXIF_IFD_EXIF, EXIF_TAG_PIXEL_X_DIMENSION);
+	exif_set_long(entry->data, order, 8);
+	entry = init_tag(exif, EXIF_IFD_EXIF, EXIF_TAG_PIXEL_Y_DIMENSION);
+	exif_set_long(entry->data, order, 6);
+
+	create_ascii_tag(exif, EXIF_IFD_GPS, EXIF_TAG_GPS_LATITUDE_REF, "N");
+	create_rational_tag(exif, EXIF_IFD_GPS, EXIF_TAG_GPS_LATITUDE, 3,
+			    latitude, order);
+	create_ascii_tag(exif, EXIF_IFD_GPS, EXIF_TAG_GPS_LONGITUDE_REF, "W");
+	create_rational_tag(exif, EXIF_IFD_GPS, EXIF_TAG_GPS_LONGITUDE, 3,
+			    longitude, order);
+	create_ascii_tag(exif, EXIF_IFD_GPS, EXIF_TAG_GPS_MAP_DATUM, "WGS-84");
+	create_ascii_tag(exif, EXIF_IFD_GPS, EXIF_TAG_GPS_DATE_STAMP,
+			 "2024:01:02");
+
+	if (copy_with_exif(argv[1], argv[2], exif) != 0) {
+		exif_data_unref(exif);
+		return 1;
+	}
+
+	exif_data_unref(exif);
+	return 0;
+}
+EOF
+}
+
 create_test_fixtures() {
   local tmp_step1="$FIXTURE_ROOT/generated-step1.jpg"
+  local gps_writer_src="$FIXTURE_ROOT/libexif-gps-writer.c"
+  local gps_writer_bin="$FIXTURE_ROOT/libexif-gps-writer"
 
   log_step "Creating test fixtures"
 
@@ -313,9 +532,13 @@ create_test_fixtures() {
   convert -size 8x6 xc:red "$FIXTURE_ROOT/plain.jpg"
   exif --create-exif --ifd=0 --tag Orientation --set-value 6 -o "$tmp_step1" "$FIXTURE_ROOT/plain.jpg" >/tmp/libexif-fixture-create.log 2>&1
   exif --ifd=0 --tag DateTime --set-value '2024:01:02 03:04:05' -o "$GENERATED_FIXTURE" "$tmp_step1" >/tmp/libexif-fixture-update.log 2>&1
+  build_gps_fixture_writer "$gps_writer_src"
+  cc -Wall -Wextra -o "$gps_writer_bin" "$gps_writer_src" $(pkg-config --cflags --libs libexif)
+  "$gps_writer_bin" "$FIXTURE_ROOT/plain.jpg" "$GPS_FIXTURE"
   cp "$FUJI_FIXTURE" "$GPHOTO_FIXTURE_DIR/fuji.jpg"
 
   require_nonempty_file "$GENERATED_FIXTURE"
+  require_nonempty_file "$GPS_FIXTURE"
   require_nonempty_file "$GPHOTO_FIXTURE_DIR/fuji.jpg"
 }
 
@@ -370,15 +593,20 @@ test_exiftran() {
 test_eog_plugin_exif_display() {
   local dir="$1"
 
-  assert_binary_uses_active_libexif /usr/lib/x86_64-linux-gnu/eog/plugins/libexif-display.so
+  assert_binary_uses_active_libexif "$EOG_PLUGIN_DIR/libexif-display.so"
   run_eog_plugin_smoke "exif-display" "$FUJI_FIXTURE" "$dir"
 }
 
 test_eog_plugin_map() {
   local dir="$1"
 
-  assert_binary_uses_active_libexif /usr/lib/x86_64-linux-gnu/eog/plugins/libmap.so
-  run_eog_plugin_smoke "map" "$GENERATED_FIXTURE" "$dir"
+  assert_binary_uses_active_libexif "$EOG_PLUGIN_DIR/libmap.so"
+  exif -m "$GPS_FIXTURE" >"$dir/gps-exif.out"
+  require_contains "$dir/gps-exif.out" $'North or South Latitude\tN'
+  require_contains "$dir/gps-exif.out" $'Latitude\t33, 26, 27.36'
+  require_contains "$dir/gps-exif.out" $'East or West Longitude\tW'
+  require_contains "$dir/gps-exif.out" $'GPS Date\t2024:01:02'
+  run_eog_plugin_smoke "map" "$GPS_FIXTURE" "$dir"
 }
 
 test_tracker_extract() {
@@ -458,24 +686,53 @@ EOF
 
 test_gerbera() {
   local dir="$1"
+  local media_dir="$dir/media"
   local home_dir="$dir/home"
+  local config_block="$dir/gerbera-import.xml"
   local status=0
 
   assert_binary_uses_active_libexif /usr/bin/gerbera
 
-  mkdir -p "$home_dir"
+  mkdir -p "$home_dir" "$media_dir"
+  cp "$GPS_FIXTURE" "$media_dir/photo.jpg"
   gerbera --create-config >"$dir/config.xml"
-  timeout 10 gerbera --config "$dir/config.xml" --home "$home_dir" --offline >"$dir/gerbera.stdout" 2>"$dir/gerbera.stderr" || status=$?
+  cat >"$config_block" <<EOF
+    <autoscan use-inotify="no">
+      <directory location="$media_dir" mode="timed" interval="300" recursive="yes" hidden-files="no" media-type="Any" />
+    </autoscan>
+    <library-options>
+      <libexif charset="UTF-8">
+        <metadata>
+          <add-data tag="EXIF_TAG_MODEL" key="exif:model" />
+          <add-data tag="EXIF_TAG_DATE_TIME_ORIGINAL" key="exif:datetime-original" />
+        </metadata>
+        <auxdata>
+          <add-data tag="EXIF_TAG_ORIENTATION" />
+        </auxdata>
+      </libexif>
+    </library-options>
+EOF
+  insert_block_before_marker "$dir/config.xml" '</import>' "$config_block"
+
+  timeout 20 gerbera --config "$dir/config.xml" --home "$home_dir" --offline >"$dir/gerbera.stdout" 2>"$dir/gerbera.stderr" || status=$?
   assert_status_equals 124 "${status:-0}" "gerbera"
   require_contains "$dir/gerbera.stdout" 'Configuration check succeeded.'
   require_contains "$dir/gerbera.stdout" 'database created successfully.'
   require_nonempty_file "$home_dir/gerbera.db"
+
+  sqlite3 "$home_dir/gerbera.db" "select location || '|' || mime_type || '|' || auxdata from mt_cds_object where location like '%/photo.jpg';" >"$dir/gerbera-object.out"
+  sqlite3 "$home_dir/gerbera.db" "select property_name || '=' || property_value from mt_metadata where item_id in (select id from mt_cds_object where location like '%/photo.jpg') order by property_name;" >"$dir/gerbera-metadata.out"
+
+  require_contains "$dir/gerbera-object.out" 'photo.jpg|image/jpeg|EXIF_TAG_ORIENTATION=Top-left'
+  require_contains "$dir/gerbera-metadata.out" 'dc:date=2024-01-02T03:04:05'
+  require_contains "$dir/gerbera-metadata.out" 'exif:datetime-original=2024:01:02 03:04:05'
+  require_contains "$dir/gerbera-metadata.out" 'exif:model=libexif-gps'
 }
 
 test_ruby_exif() {
   local dir="$1"
 
-  assert_binary_uses_active_libexif /usr/lib/x86_64-linux-gnu/ruby/vendor_ruby/3.2.0/exif.so
+  assert_binary_uses_active_libexif "$RUBY_VENDORARCHDIR/exif.so"
   ruby -rexif -e 'x = Exif.new(ARGV[0]); puts x["Model"]; puts x["Date and Time"]' "$FUJI_FIXTURE" >"$dir/ruby-exif.out"
   require_contains "$dir/ruby-exif.out" 'FinePix Z33WP'
   require_contains "$dir/ruby-exif.out" '2009:03:25 03:27:25'
