@@ -208,6 +208,61 @@ static int name(void)
     return fail;
 }
 
+/* Test additional public tag metadata APIs */
+static int metadata(void)
+{
+    int fail = 0;
+    const char *title;
+    const char *description;
+
+    VALIDATE(exif_tag_from_name("ImageDescription") ==
+             EXIF_TAG_IMAGE_DESCRIPTION)
+    VALIDATE(exif_tag_from_name("GPSVersionID") == EXIF_TAG_GPS_VERSION_ID)
+    VALIDATE(exif_tag_from_name("InteroperabilityIndex") ==
+             EXIF_TAG_INTEROPERABILITY_INDEX)
+    VALIDATE(exif_tag_from_name("ThisTagDoesNotExist") == 0)
+    VALIDATE(exif_tag_from_name(NULL) == 0)
+
+    title = exif_tag_get_title_in_ifd(EXIF_TAG_GPS_LATITUDE_REF, EXIF_IFD_GPS);
+    VALIDATE(title != NULL)
+    VALIDATE(!strcmp(title, "North or South Latitude"))
+
+    VALIDATE(exif_tag_get_title_in_ifd(
+                        EXIF_TAG_GPS_LATITUDE_REF, EXIF_IFD_0) == NULL)
+
+    description = exif_tag_get_description_in_ifd(
+                        EXIF_TAG_GPS_ALTITUDE_REF, EXIF_IFD_GPS);
+    VALIDATE(description != NULL)
+    VALIDATE(strstr(description, "sea level") != NULL)
+
+    description = exif_tag_get_description_in_ifd(
+                        EXIF_TAG_INTEROPERABILITY_VERSION,
+                        EXIF_IFD_INTEROPERABILITY);
+    VALIDATE(description != NULL)
+    VALIDATE(!strcmp(description, ""))
+
+    VALIDATE(exif_tag_get_description_in_ifd(
+                        EXIF_TAG_EXIF_VERSION, EXIF_IFD_0) == NULL)
+
+    VALIDATE(!strcmp(exif_tag_get_name(
+                        EXIF_TAG_INTEROPERABILITY_INDEX),
+                     "InteroperabilityIndex"))
+    VALIDATE(!strcmp(exif_tag_get_name(
+                        EXIF_TAG_GPS_VERSION_ID),
+                     "GPSVersionID"))
+    VALIDATE(!strcmp(exif_tag_get_name(
+                        EXIF_TAG_GPS_LATITUDE_REF),
+                     "InteroperabilityIndex"))
+    VALIDATE(!strcmp(exif_tag_get_title(
+                        EXIF_TAG_GPS_LATITUDE_REF),
+                     "Interoperability Index"))
+    VALIDATE(strstr(exif_tag_get_description(
+                        EXIF_TAG_GPS_ALTITUDE_REF),
+                    "sea level") != NULL)
+
+    return fail;
+}
+
 int
 main ()
 {
@@ -215,6 +270,7 @@ main ()
 
     TESTBLOCK(support_level())
     TESTBLOCK(name())
+    TESTBLOCK(metadata())
 
     return fail;
 }
