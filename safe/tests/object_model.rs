@@ -109,10 +109,14 @@ fn entry_value_reads_current_public_data_fields() {
 fn data_fix_populates_mandatory_entries_and_null_defaults_match_phase_requirements() {
     unsafe {
         assert_eq!(exif_content_get_ifd(ptr::null_mut()), EXIF_IFD_COUNT);
-        assert_eq!(exif_data_get_data_type(ptr::null_mut()), EXIF_DATA_TYPE_UNKNOWN);
+        assert_eq!(
+            exif_data_get_data_type(ptr::null_mut()),
+            EXIF_DATA_TYPE_UNKNOWN
+        );
 
         let mut buffer = [b'*' as c_char; 4];
-        let returned = exif_entry_get_value(ptr::null_mut(), buffer.as_mut_ptr(), buffer.len() as u32);
+        let returned =
+            exif_entry_get_value(ptr::null_mut(), buffer.as_mut_ptr(), buffer.len() as u32);
         assert_eq!(returned, buffer.as_ptr());
         assert_eq!(buffer[0], b'*' as c_char);
 
@@ -129,5 +133,7 @@ fn data_fix_populates_mandatory_entries_and_null_defaults_match_phase_requiremen
 }
 
 fn c_str(ptr_: *const c_char) -> String {
-    unsafe { CStr::from_ptr(ptr_) }.to_string_lossy().into_owned()
+    unsafe { CStr::from_ptr(ptr_) }
+        .to_string_lossy()
+        .into_owned()
 }

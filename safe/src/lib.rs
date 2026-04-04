@@ -20,12 +20,12 @@ pub use mnote::canon::{
     mnote_canon_tag_get_name, mnote_canon_tag_get_title,
 };
 pub use mnote::olympus::{
-    exif_mnote_data_olympus_new, mnote_olympus_entry_get_value,
-    mnote_olympus_tag_get_description, mnote_olympus_tag_get_name, mnote_olympus_tag_get_title,
+    exif_mnote_data_olympus_new, mnote_olympus_entry_get_value, mnote_olympus_tag_get_description,
+    mnote_olympus_tag_get_name, mnote_olympus_tag_get_title,
 };
 pub use mnote::pentax::{
-    exif_mnote_data_pentax_new, mnote_pentax_entry_get_value,
-    mnote_pentax_tag_get_description, mnote_pentax_tag_get_name, mnote_pentax_tag_get_title,
+    exif_mnote_data_pentax_new, mnote_pentax_entry_get_value, mnote_pentax_tag_get_description,
+    mnote_pentax_tag_get_name, mnote_pentax_tag_get_title,
 };
 
 unsafe extern "C" {

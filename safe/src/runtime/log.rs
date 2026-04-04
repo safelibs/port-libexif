@@ -52,7 +52,8 @@ unsafe fn log_private(log: *mut ExifLog) -> *mut ExifLogPrivate {
 }
 
 pub(crate) unsafe fn exif_log_new_mem_impl(mem: *mut ExifMem) -> *mut ExifLog {
-    let log = unsafe { exif_mem_alloc_impl(mem, size_of::<ExifLogPrivate>() as u32) }.cast::<ExifLogPrivate>();
+    let log = unsafe { exif_mem_alloc_impl(mem, size_of::<ExifLogPrivate>() as u32) }
+        .cast::<ExifLogPrivate>();
     if log.is_null() {
         return ptr::null_mut();
     }
@@ -108,7 +109,11 @@ pub(crate) unsafe fn exif_log_unref_impl(log: *mut ExifLog) {
     }
 }
 
-pub(crate) unsafe fn exif_log_set_func_impl(log: *mut ExifLog, func: ExifLogFunc, data: *mut c_void) {
+pub(crate) unsafe fn exif_log_set_func_impl(
+    log: *mut ExifLog,
+    func: ExifLogFunc,
+    data: *mut c_void,
+) {
     if log.is_null() {
         return;
     }
@@ -157,7 +162,11 @@ pub unsafe extern "C" fn exif_log_free(log: *mut ExifLog) {
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn exif_log_set_func(log: *mut ExifLog, func: ExifLogFunc, data: *mut c_void) {
+pub unsafe extern "C" fn exif_log_set_func(
+    log: *mut ExifLog,
+    func: ExifLogFunc,
+    data: *mut c_void,
+) {
     panic_boundary::call_void(|| unsafe { exif_log_set_func_impl(log, func, data) });
 }
 

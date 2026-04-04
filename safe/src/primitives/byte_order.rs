@@ -2,9 +2,7 @@ use core::ffi::c_char;
 use core::ptr;
 
 use crate::ffi::panic_boundary;
-use crate::ffi::types::{
-    ExifByteOrder, EXIF_BYTE_ORDER_INTEL, EXIF_BYTE_ORDER_MOTOROLA,
-};
+use crate::ffi::types::{ExifByteOrder, EXIF_BYTE_ORDER_INTEL, EXIF_BYTE_ORDER_MOTOROLA};
 use crate::i18n::{gettext, message};
 
 const MOTOROLA_NAME: crate::i18n::Message = message(b"Motorola\0");

@@ -179,7 +179,10 @@ pub unsafe extern "C" fn exif_mnote_data_get_id(note: *mut ExifMnoteData, index:
         if note.is_null() {
             return 0;
         }
-        (*note).methods.get_id.map_or(0, |get_id_fn| get_id_fn(note, index))
+        (*note)
+            .methods
+            .get_id
+            .map_or(0, |get_id_fn| get_id_fn(note, index))
     })
 }
 
@@ -224,9 +227,12 @@ pub unsafe extern "C" fn exif_mnote_data_get_description(
         if note.is_null() {
             return ptr::null();
         }
-        (*note).methods.get_description.map_or(ptr::null(), |get_description_fn| {
-            get_description_fn(note, index)
-        })
+        (*note)
+            .methods
+            .get_description
+            .map_or(ptr::null(), |get_description_fn| {
+                get_description_fn(note, index)
+            })
     })
 }
 
@@ -244,6 +250,8 @@ pub unsafe extern "C" fn exif_mnote_data_get_value(
         (*note)
             .methods
             .get_value
-            .map_or(ptr::null_mut(), |get_value_fn| get_value_fn(note, index, value, maxlen))
+            .map_or(ptr::null_mut(), |get_value_fn| {
+                get_value_fn(note, index, value, maxlen)
+            })
     })
 }

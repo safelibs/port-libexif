@@ -68,7 +68,9 @@ fn exif_data_option_strings_match_original_c_locale() {
         Some("Follow specification".to_owned())
     );
     assert_eq!(
-        c_string(unsafe { exif_data_option_get_description(EXIF_DATA_OPTION_FOLLOW_SPECIFICATION) }),
+        c_string(unsafe {
+            exif_data_option_get_description(EXIF_DATA_OPTION_FOLLOW_SPECIFICATION)
+        }),
         Some(
             "Add, correct and remove entries to get EXIF data that follows the specification."
                 .to_owned(),
@@ -128,7 +130,11 @@ fn exif_mem_preserves_allocator_and_refcount_semantics() {
     unsafe {
         assert!(exif_mem_new(None, None, None).is_null());
 
-        let mem = exif_mem_new(Some(counting_alloc), Some(counting_realloc), Some(counting_free));
+        let mem = exif_mem_new(
+            Some(counting_alloc),
+            Some(counting_realloc),
+            Some(counting_free),
+        );
         assert!(!mem.is_null());
         assert_eq!(ALLOC_CALLS.load(Ordering::SeqCst), 1);
         assert_eq!(REALLOC_CALLS.load(Ordering::SeqCst), 0);
@@ -267,7 +273,11 @@ fn c_string(ptr_: *const c_char) -> Option<String> {
     if ptr_.is_null() {
         None
     } else {
-        Some(unsafe { CStr::from_ptr(ptr_) }.to_string_lossy().into_owned())
+        Some(
+            unsafe { CStr::from_ptr(ptr_) }
+                .to_string_lossy()
+                .into_owned(),
+        )
     }
 }
 

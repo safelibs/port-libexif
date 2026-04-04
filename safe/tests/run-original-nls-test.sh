@@ -6,6 +6,10 @@ safe_dir=$(cd "$script_dir/.." && pwd)
 build_root=${PACKAGE_BUILD_ROOT:-$(mktemp -d "${TMPDIR:-/tmp}/libexif-nls.XXXXXX")}
 binary="$build_root/print-localedir"
 
+export LC_ALL=C
+export LANG=
+export LANGUAGE=
+
 cc -std=c11 \
     -I"$safe_dir/tests/support" \
     "$safe_dir/tests/original-c/nls/print-localedir.c" \
@@ -16,7 +20,6 @@ chmod +x "$build_root/check-localedir.sh"
 
 (
     cd "$build_root"
-    LC_ALL=C LANG= LANGUAGE= \
     LOCALEDIR="/usr/share/locale" \
     PRINT_LOCALEDIR_BIN="$binary" \
     ./check-localedir.sh

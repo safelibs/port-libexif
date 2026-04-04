@@ -68,7 +68,13 @@ pub(crate) unsafe fn exif_mem_new_impl(
 }
 
 pub(crate) unsafe fn exif_mem_new_default_impl() -> *mut ExifMem {
-    unsafe { exif_mem_new_impl(Some(default_alloc), Some(default_realloc), Some(default_free)) }
+    unsafe {
+        exif_mem_new_impl(
+            Some(default_alloc),
+            Some(default_realloc),
+            Some(default_free),
+        )
+    }
 }
 
 pub(crate) unsafe fn exif_mem_ref_impl(mem: *mut ExifMem) {
@@ -161,7 +167,9 @@ pub unsafe extern "C" fn exif_mem_unref(mem: *mut ExifMem) {
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn exif_mem_alloc(mem: *mut ExifMem, size: ExifLong) -> *mut c_void {
-    panic_boundary::call_or(ptr::null_mut(), || unsafe { exif_mem_alloc_impl(mem, size) })
+    panic_boundary::call_or(ptr::null_mut(), || unsafe {
+        exif_mem_alloc_impl(mem, size)
+    })
 }
 
 #[unsafe(no_mangle)]
@@ -170,7 +178,9 @@ pub unsafe extern "C" fn exif_mem_realloc(
     ptr_: *mut c_void,
     size: ExifLong,
 ) -> *mut c_void {
-    panic_boundary::call_or(ptr::null_mut(), || unsafe { exif_mem_realloc_impl(mem, ptr_, size) })
+    panic_boundary::call_or(ptr::null_mut(), || unsafe {
+        exif_mem_realloc_impl(mem, ptr_, size)
+    })
 }
 
 #[unsafe(no_mangle)]

@@ -9,8 +9,7 @@ static INIT_GETTEXT: Once = Once::new();
 
 unsafe extern "C" {
     fn bindtextdomain(domainname: *const c_char, dirname: *const c_char) -> *mut c_char;
-    fn bind_textdomain_codeset(domainname: *const c_char, codeset: *const c_char)
-    -> *mut c_char;
+    fn bind_textdomain_codeset(domainname: *const c_char, codeset: *const c_char) -> *mut c_char;
     fn dgettext(domainname: *const c_char, message: *const c_char) -> *mut c_char;
 }
 

@@ -14,6 +14,10 @@ diff_cmd=${DIFF:-diff}
 diff_u_cmd=${DIFF_U:-"diff -u"}
 failmalloc_path=${FAILMALLOC_PATH:-}
 
+export LC_ALL=C
+export LANG=
+export LANGUAGE=
+
 sources=(
     test-parse
     test-extract
@@ -63,9 +67,6 @@ run_script() {
         cd "$binary_dir"
         export srcdir="$binary_dir"
         export EXEEXT="$exeext"
-        export LC_ALL=C
-        export LANG=
-        export LANGUAGE=
         export DIFF="$diff_cmd"
         export DIFF_U="$diff_u_cmd"
         export FAILMALLOC_PATH="$failmalloc_path"

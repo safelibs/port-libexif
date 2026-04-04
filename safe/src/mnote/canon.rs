@@ -30,10 +30,7 @@ pub(crate) unsafe fn identify_impl(data: *const ExifData, entry: *const ExifEntr
     unsafe { safe_helper_exif_mnote_data_canon_identify(data, entry) }
 }
 
-pub(crate) unsafe fn new_impl(
-    mem: *mut ExifMem,
-    option: ExifDataOption,
-) -> *mut ExifMnoteData {
+pub(crate) unsafe fn new_impl(mem: *mut ExifMem, option: ExifDataOption) -> *mut ExifMnoteData {
     unsafe { safe_helper_exif_mnote_data_canon_new(mem, option) }
 }
 
@@ -66,10 +63,14 @@ pub unsafe extern "C" fn mnote_canon_tag_get_description(tag: MnoteCanonTag) -> 
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn mnote_canon_tag_get_name(tag: MnoteCanonTag) -> *const c_char {
-    panic_boundary::call_or(ptr::null(), || unsafe { safe_helper_mnote_canon_tag_get_name(tag) })
+    panic_boundary::call_or(ptr::null(), || unsafe {
+        safe_helper_mnote_canon_tag_get_name(tag)
+    })
 }
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn mnote_canon_tag_get_title(tag: MnoteCanonTag) -> *const c_char {
-    panic_boundary::call_or(ptr::null(), || unsafe { safe_helper_mnote_canon_tag_get_title(tag) })
+    panic_boundary::call_or(ptr::null(), || unsafe {
+        safe_helper_mnote_canon_tag_get_title(tag)
+    })
 }

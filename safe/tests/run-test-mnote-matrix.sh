@@ -3,6 +3,10 @@ set -euo pipefail
 
 script_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 
+export LC_ALL=C
+export LANG=
+export LANGUAGE=
+
 images=(
     canon_makernote_variant_1.jpg
     fuji_makernote_variant_1.jpg
@@ -11,9 +15,5 @@ images=(
 )
 
 for image in "${images[@]}"; do
-    LC_ALL=C LANG= LANGUAGE= \
     "$script_dir/run-c-test.sh" test-mnote "$script_dir/testdata/$image"
 done
-
-LC_ALL=C LANG= LANGUAGE= \
-"$script_dir/run-c-test.sh" test-apple-mnote

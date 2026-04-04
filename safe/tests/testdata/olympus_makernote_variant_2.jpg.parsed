@@ -71,7 +71,7 @@ Byte order: Intel
       Value: Y Cb Cr -
     Entry 8: CompressedBitsPerPixel (Rational)
       Size, Comps: 8, 1
-      Value: 2
+      Value:  2
     Entry 9: ExposureBiasValue (SRational)
       Size, Comps: 8, 1
       Value: -2.00 EV

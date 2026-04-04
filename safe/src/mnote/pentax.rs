@@ -47,9 +47,7 @@ pub unsafe extern "C" fn mnote_pentax_entry_get_value(
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn mnote_pentax_tag_get_description(
-    tag: MnotePentaxTag,
-) -> *const c_char {
+pub unsafe extern "C" fn mnote_pentax_tag_get_description(tag: MnotePentaxTag) -> *const c_char {
     panic_boundary::call_or(ptr::null(), || unsafe {
         safe_helper_mnote_pentax_tag_get_description(tag)
     })
@@ -57,7 +55,9 @@ pub unsafe extern "C" fn mnote_pentax_tag_get_description(
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn mnote_pentax_tag_get_name(tag: MnotePentaxTag) -> *const c_char {
-    panic_boundary::call_or(ptr::null(), || unsafe { safe_helper_mnote_pentax_tag_get_name(tag) })
+    panic_boundary::call_or(ptr::null(), || unsafe {
+        safe_helper_mnote_pentax_tag_get_name(tag)
+    })
 }
 
 #[unsafe(no_mangle)]

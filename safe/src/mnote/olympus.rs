@@ -47,9 +47,7 @@ pub unsafe extern "C" fn mnote_olympus_entry_get_value(
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn mnote_olympus_tag_get_description(
-    tag: MnoteOlympusTag,
-) -> *const c_char {
+pub unsafe extern "C" fn mnote_olympus_tag_get_description(tag: MnoteOlympusTag) -> *const c_char {
     panic_boundary::call_or(ptr::null(), || unsafe {
         safe_helper_mnote_olympus_tag_get_description(tag)
     })

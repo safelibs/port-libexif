@@ -35,8 +35,7 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     println!(
         "cargo:rustc-env=LIBEXIF_GETTEXT_PACKAGE={}",
-        env::var("LIBEXIF_GETTEXT_PACKAGE")
-            .unwrap_or_else(|_| DEFAULT_GETTEXT_PACKAGE.to_owned())
+        env::var("LIBEXIF_GETTEXT_PACKAGE").unwrap_or_else(|_| DEFAULT_GETTEXT_PACKAGE.to_owned())
     );
     println!(
         "cargo:rustc-env=LIBEXIF_LOCALEDIR={}",
@@ -95,10 +94,22 @@ fn build_mnote_helpers() {
                 "exif_mnote_data_apple_identify",
                 "safe_helper_exif_mnote_data_apple_identify",
             ),
-            ("exif_mnote_data_apple_new", "safe_helper_exif_mnote_data_apple_new"),
-            ("mnote_apple_entry_get_value", "safe_helper_mnote_apple_entry_get_value"),
-            ("mnote_apple_tag_get_name", "safe_helper_mnote_apple_tag_get_name"),
-            ("mnote_apple_tag_get_title", "safe_helper_mnote_apple_tag_get_title"),
+            (
+                "exif_mnote_data_apple_new",
+                "safe_helper_exif_mnote_data_apple_new",
+            ),
+            (
+                "mnote_apple_entry_get_value",
+                "safe_helper_mnote_apple_entry_get_value",
+            ),
+            (
+                "mnote_apple_tag_get_name",
+                "safe_helper_mnote_apple_tag_get_name",
+            ),
+            (
+                "mnote_apple_tag_get_title",
+                "safe_helper_mnote_apple_tag_get_title",
+            ),
             (
                 "mnote_apple_tag_get_description",
                 "safe_helper_mnote_apple_tag_get_description",
@@ -117,18 +128,30 @@ fn build_mnote_helpers() {
                 "exif_mnote_data_canon_identify",
                 "safe_helper_exif_mnote_data_canon_identify",
             ),
-            ("exif_mnote_data_canon_new", "safe_helper_exif_mnote_data_canon_new"),
+            (
+                "exif_mnote_data_canon_new",
+                "safe_helper_exif_mnote_data_canon_new",
+            ),
             (
                 "mnote_canon_entry_count_values",
                 "safe_helper_mnote_canon_entry_count_values",
             ),
-            ("mnote_canon_entry_get_value", "safe_helper_mnote_canon_entry_get_value"),
-            ("mnote_canon_tag_get_name", "safe_helper_mnote_canon_tag_get_name"),
+            (
+                "mnote_canon_entry_get_value",
+                "safe_helper_mnote_canon_entry_get_value",
+            ),
+            (
+                "mnote_canon_tag_get_name",
+                "safe_helper_mnote_canon_tag_get_name",
+            ),
             (
                 "mnote_canon_tag_get_name_sub",
                 "safe_helper_mnote_canon_tag_get_name_sub",
             ),
-            ("mnote_canon_tag_get_title", "safe_helper_mnote_canon_tag_get_title"),
+            (
+                "mnote_canon_tag_get_title",
+                "safe_helper_mnote_canon_tag_get_title",
+            ),
             (
                 "mnote_canon_tag_get_title_sub",
                 "safe_helper_mnote_canon_tag_get_title_sub",
@@ -151,10 +174,22 @@ fn build_mnote_helpers() {
                 "exif_mnote_data_fuji_identify",
                 "safe_helper_exif_mnote_data_fuji_identify",
             ),
-            ("exif_mnote_data_fuji_new", "safe_helper_exif_mnote_data_fuji_new"),
-            ("mnote_fuji_entry_get_value", "safe_helper_mnote_fuji_entry_get_value"),
-            ("mnote_fuji_tag_get_name", "safe_helper_mnote_fuji_tag_get_name"),
-            ("mnote_fuji_tag_get_title", "safe_helper_mnote_fuji_tag_get_title"),
+            (
+                "exif_mnote_data_fuji_new",
+                "safe_helper_exif_mnote_data_fuji_new",
+            ),
+            (
+                "mnote_fuji_entry_get_value",
+                "safe_helper_mnote_fuji_entry_get_value",
+            ),
+            (
+                "mnote_fuji_tag_get_name",
+                "safe_helper_mnote_fuji_tag_get_name",
+            ),
+            (
+                "mnote_fuji_tag_get_title",
+                "safe_helper_mnote_fuji_tag_get_title",
+            ),
             (
                 "mnote_fuji_tag_get_description",
                 "safe_helper_mnote_fuji_tag_get_description",
@@ -181,7 +216,10 @@ fn build_mnote_helpers() {
                 "mnote_olympus_entry_get_value",
                 "safe_helper_mnote_olympus_entry_get_value",
             ),
-            ("mnote_olympus_tag_get_name", "safe_helper_mnote_olympus_tag_get_name"),
+            (
+                "mnote_olympus_tag_get_name",
+                "safe_helper_mnote_olympus_tag_get_name",
+            ),
             (
                 "mnote_olympus_tag_get_title",
                 "safe_helper_mnote_olympus_tag_get_title",
@@ -212,8 +250,14 @@ fn build_mnote_helpers() {
                 "mnote_pentax_entry_get_value",
                 "safe_helper_mnote_pentax_entry_get_value",
             ),
-            ("mnote_pentax_tag_get_name", "safe_helper_mnote_pentax_tag_get_name"),
-            ("mnote_pentax_tag_get_title", "safe_helper_mnote_pentax_tag_get_title"),
+            (
+                "mnote_pentax_tag_get_name",
+                "safe_helper_mnote_pentax_tag_get_name",
+            ),
+            (
+                "mnote_pentax_tag_get_title",
+                "safe_helper_mnote_pentax_tag_get_title",
+            ),
             (
                 "mnote_pentax_tag_get_description",
                 "safe_helper_mnote_pentax_tag_get_description",
@@ -286,7 +330,10 @@ fn render_tag_table_data() -> Result<String, Box<dyn Error>> {
         output.push_str("    TagEntry {\n");
         output.push_str(&format!("        tag: {},\n", entry.tag));
         output.push_str(&format!("        name: {},\n", render_message(&entry.name)));
-        output.push_str(&format!("        title: {},\n", render_message(&entry.title)));
+        output.push_str(&format!(
+            "        title: {},\n",
+            render_message(&entry.title)
+        ));
         output.push_str(&format!(
             "        description: {},\n",
             render_message(&entry.description)
@@ -333,11 +380,16 @@ fn preprocess_tag_source() -> Result<String, Box<dyn Error>> {
 
 fn parse_tag_values(preprocessed: &str) -> Result<HashMap<String, u32>, io::Error> {
     let enum_end = preprocessed.find("} ExifTag;").ok_or_else(|| {
-        io::Error::new(io::ErrorKind::InvalidData, "failed to locate ExifTag enum end")
+        io::Error::new(
+            io::ErrorKind::InvalidData,
+            "failed to locate ExifTag enum end",
+        )
     })?;
     let enum_start = preprocessed[..enum_end]
         .rfind("typedef enum {")
-        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "failed to locate ExifTag enum"))?
+        .ok_or_else(|| {
+            io::Error::new(io::ErrorKind::InvalidData, "failed to locate ExifTag enum")
+        })?
         + "typedef enum {".len();
     let enum_body = &preprocessed[enum_start..enum_end];
 
@@ -365,10 +417,9 @@ fn parse_tag_table_entries(
     preprocessed: &str,
     tag_values: &HashMap<String, u32>,
 ) -> Result<Vec<ParsedTagEntry>, io::Error> {
-    let table_start = preprocessed
-        .find("} ExifTagTable[] = {")
-        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "failed to locate ExifTagTable"))?
-        + "} ExifTagTable[] = {".len();
+    let table_start = preprocessed.find("} ExifTagTable[] = {").ok_or_else(|| {
+        io::Error::new(io::ErrorKind::InvalidData, "failed to locate ExifTagTable")
+    })? + "} ExifTagTable[] = {".len();
     let body = &preprocessed[table_start..];
     let raw_entries = split_entries(body)?;
 
@@ -639,9 +690,8 @@ fn unescape_c_string(source: &str) -> Result<Vec<u8>, io::Error> {
                         "empty hexadecimal escape in C string",
                     ));
                 }
-                let value = u8::from_str_radix(&source[hex_start..index], 16).map_err(|error| {
-                    io::Error::new(io::ErrorKind::InvalidData, error)
-                })?;
+                let value = u8::from_str_radix(&source[hex_start..index], 16)
+                    .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
                 output.push(value);
             }
             b'0'..=b'7' => {
@@ -653,9 +703,8 @@ fn unescape_c_string(source: &str) -> Result<Vec<u8>, io::Error> {
                 {
                     index += 1;
                 }
-                let value = u8::from_str_radix(&source[oct_start..index], 8).map_err(|error| {
-                    io::Error::new(io::ErrorKind::InvalidData, error)
-                })?;
+                let value = u8::from_str_radix(&source[oct_start..index], 8)
+                    .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
                 output.push(value);
             }
             _ => {
@@ -698,7 +747,8 @@ fn render_byte_string(bytes: &[u8]) -> String {
 
 fn parse_u32(token: &str) -> Result<u32, io::Error> {
     if let Some(hex) = token.strip_prefix("0x") {
-        u32::from_str_radix(hex, 16).map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))
+        u32::from_str_radix(hex, 16)
+            .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))
     } else {
         token
             .parse::<u32>()

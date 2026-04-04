@@ -9,9 +9,10 @@ usage() {
   cat <<'EOF'
 usage: test-original.sh [--only <dependent-name>]
 
-Builds the local Debian packages from ./original inside an Ubuntu 24.04 Docker
+Builds the local Debian packages from ./safe inside an Ubuntu 24.04 Docker
 container, installs them, and smoke-tests the dependent software recorded in
-dependents.json.
+dependents.json. The safe package build still stages the vendored ./original
+tree alongside ./safe because the Rust build reuses those helper sources.
 
 --only runs just one dependent by exact .dependents[].name.
 EOF
@@ -40,8 +41,13 @@ command -v docker >/dev/null 2>&1 || {
   exit 1
 }
 
+[[ -d "$ROOT/safe" ]] || {
+  echo "missing safe source tree" >&2
+  exit 1
+}
+
 [[ -d "$ROOT/original" ]] || {
-  echo "missing original source tree" >&2
+  echo "missing original helper source tree" >&2
   exit 1
 }
 
@@ -54,12 +60,16 @@ docker build -t "$IMAGE_TAG" - <<'DOCKERFILE'
 FROM ubuntu:24.04
 
 ARG DEBIAN_FRONTEND=noninteractive
+ENV RUSTUP_HOME=/root/.rustup
+ENV CARGO_HOME=/root/.cargo
+ENV PATH=/root/.cargo/bin:${PATH}
 
 RUN sed -i 's/^Types: deb$/Types: deb deb-src/' /etc/apt/sources.list.d/ubuntu.sources \
  && apt-get update \
  && apt-get install -y --no-install-recommends \
       build-essential \
       ca-certificates \
+      curl \
       dbus-x11 \
       debhelper \
       dpkg-dev \
@@ -75,6 +85,7 @@ RUN sed -i 's/^Types: deb$/Types: deb deb-src/' /etc/apt/sources.list.d/ubuntu.s
       gtkam \
       imagemagick \
       jq \
+      cargo \
       libcamlimages-ocaml \
       libcamlimages-ocaml-dev \
       libexif-gtk-dev \
@@ -86,6 +97,7 @@ RUN sed -i 's/^Types: deb$/Types: deb deb-src/' /etc/apt/sources.list.d/ubuntu.s
       ocaml-nox \
       pkg-config \
       python3-dogtail \
+      rustc \
       ruby \
       ruby-exif \
       shotwell \
@@ -96,6 +108,10 @@ RUN sed -i 's/^Types: deb$/Types: deb deb-src/' /etc/apt/sources.list.d/ubuntu.s
       xvfb \
       gerbera \
  && apt-get build-dep -y --no-install-recommends libexif \
+ && curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
+      | sh -s -- -y --profile minimal --default-toolchain stable \
+ && cargo --version \
+ && rustc --version \
  && rm -rf /var/lib/apt/lists/*
 DOCKERFILE
 
@@ -113,20 +129,22 @@ export DEBIAN_FRONTEND=noninteractive
 ROOT=/work
 ONLY_FILTER="${LIBEXIF_TEST_ONLY:-}"
 MULTIARCH="$(dpkg-architecture -qDEB_HOST_MULTIARCH)"
-SOURCE_COPY=/tmp/libexif-original-src
+SOURCE_ROOT=/tmp/libexif-safe-src
+SOURCE_COPY="$SOURCE_ROOT/safe"
+ORIGINAL_HELPER_COPY="$SOURCE_ROOT/original"
 FIXTURE_ROOT=/tmp/libexif-fixtures
 TEST_ROOT=/tmp/libexif-dependent-tests
-FUJI_FIXTURE="$ROOT/original/test/testdata/fuji_makernote_variant_1.jpg"
+FUJI_FIXTURE="$ROOT/safe/tests/testdata/fuji_makernote_variant_1.jpg"
 GENERATED_FIXTURE="$FIXTURE_ROOT/generated-exif.jpg"
 GPS_FIXTURE="$FIXTURE_ROOT/generated-gps.jpg"
 GPHOTO_FIXTURE_DIR="$FIXTURE_ROOT/gphoto-camera"
 EOG_PLUGIN_DIR="/usr/lib/$MULTIARCH/eog/plugins"
 RUBY_VENDORARCHDIR="$(ruby -rrbconfig -e 'print RbConfig::CONFIG["vendorarchdir"]')"
 ACTIVE_LIBEXIF=""
-ORIGINAL_RUNTIME_DEB=""
-ORIGINAL_DEV_DEB=""
-ORIGINAL_RUNTIME_VERSION=""
-ORIGINAL_DEV_VERSION=""
+PACKAGE_RUNTIME_DEB=""
+PACKAGE_DEV_DEB=""
+PACKAGE_RUNTIME_VERSION=""
+PACKAGE_DEV_VERSION=""
 
 declare -a REQUIRED_DEPENDENTS=(
   "exif"
@@ -265,14 +283,15 @@ validate_dependents() {
   fi
 }
 
-build_original_packages() {
+build_safe_packages() {
   local runtime_matches dev_matches
 
-  log_step "Building original libexif Debian packages"
+  log_step "Building safe libexif Debian packages"
 
-  rm -rf "$SOURCE_COPY"
-  rm -f /tmp/libexif12_*.deb /tmp/libexif-dev_*.deb /tmp/libexif-doc_*.deb /tmp/libexif12-dbgsym_*.deb
-  cp -a "$ROOT/original" "$SOURCE_COPY"
+  rm -rf "$SOURCE_ROOT"
+  mkdir -p "$SOURCE_ROOT"
+  cp -a "$ROOT/safe" "$SOURCE_COPY"
+  cp -a "$ROOT/original" "$ORIGINAL_HELPER_COPY"
 
   if ! (
     cd "$SOURCE_COPY"
@@ -282,43 +301,43 @@ build_original_packages() {
     exit 1
   fi
 
-  runtime_matches="$(find /tmp -maxdepth 1 -type f -name 'libexif12_*.deb' | LC_ALL=C sort)"
-  dev_matches="$(find /tmp -maxdepth 1 -type f -name 'libexif-dev_*.deb' | LC_ALL=C sort)"
+  runtime_matches="$(find "$SOURCE_ROOT" -maxdepth 1 -type f -name 'libexif12_*.deb' | LC_ALL=C sort)"
+  dev_matches="$(find "$SOURCE_ROOT" -maxdepth 1 -type f -name 'libexif-dev_*.deb' | LC_ALL=C sort)"
 
   [[ "$(printf '%s\n' "$runtime_matches" | sed '/^$/d' | wc -l)" -eq 1 ]] || die "expected exactly one libexif12 Debian package"
   [[ "$(printf '%s\n' "$dev_matches" | sed '/^$/d' | wc -l)" -eq 1 ]] || die "expected exactly one libexif-dev Debian package"
 
-  ORIGINAL_RUNTIME_DEB="$(printf '%s\n' "$runtime_matches" | head -n1)"
-  ORIGINAL_DEV_DEB="$(printf '%s\n' "$dev_matches" | head -n1)"
-  ORIGINAL_RUNTIME_VERSION="$(dpkg-deb -f "$ORIGINAL_RUNTIME_DEB" Version)"
-  ORIGINAL_DEV_VERSION="$(dpkg-deb -f "$ORIGINAL_DEV_DEB" Version)"
+  PACKAGE_RUNTIME_DEB="$(printf '%s\n' "$runtime_matches" | head -n1)"
+  PACKAGE_DEV_DEB="$(printf '%s\n' "$dev_matches" | head -n1)"
+  PACKAGE_RUNTIME_VERSION="$(dpkg-deb -f "$PACKAGE_RUNTIME_DEB" Version)"
+  PACKAGE_DEV_VERSION="$(dpkg-deb -f "$PACKAGE_DEV_DEB" Version)"
 
-  printf 'ORIGINAL_RUNTIME_DEB=%s\n' "$ORIGINAL_RUNTIME_DEB"
-  printf 'ORIGINAL_DEV_DEB=%s\n' "$ORIGINAL_DEV_DEB"
-  printf 'ORIGINAL_RUNTIME_VERSION=%s\n' "$ORIGINAL_RUNTIME_VERSION"
-  printf 'ORIGINAL_DEV_VERSION=%s\n' "$ORIGINAL_DEV_VERSION"
+  printf 'PACKAGE_RUNTIME_DEB=%s\n' "$PACKAGE_RUNTIME_DEB"
+  printf 'PACKAGE_DEV_DEB=%s\n' "$PACKAGE_DEV_DEB"
+  printf 'PACKAGE_RUNTIME_VERSION=%s\n' "$PACKAGE_RUNTIME_VERSION"
+  printf 'PACKAGE_DEV_VERSION=%s\n' "$PACKAGE_DEV_VERSION"
 }
 
-install_original_packages() {
+install_safe_packages() {
   local extract_dir deb_lib
 
-  log_step "Installing original libexif Debian packages"
+  log_step "Installing safe libexif Debian packages"
 
-  dpkg -i "$ORIGINAL_RUNTIME_DEB" "$ORIGINAL_DEV_DEB" >/tmp/libexif-install.log 2>&1 || {
+  dpkg -i "$PACKAGE_RUNTIME_DEB" "$PACKAGE_DEV_DEB" >/tmp/libexif-install.log 2>&1 || {
     cat /tmp/libexif-install.log >&2
     exit 1
   }
   ldconfig
 
-  [[ "$(dpkg-query -W -f='${Version}\n' libexif12)" == "$ORIGINAL_RUNTIME_VERSION" ]] || die "active libexif12 version mismatch"
-  [[ "$(dpkg-query -W -f='${Version}\n' libexif-dev)" == "$ORIGINAL_DEV_VERSION" ]] || die "active libexif-dev version mismatch"
+  [[ "$(dpkg-query -W -f='${Version}\n' libexif12)" == "$PACKAGE_RUNTIME_VERSION" ]] || die "active libexif12 version mismatch"
+  [[ "$(dpkg-query -W -f='${Version}\n' libexif-dev)" == "$PACKAGE_DEV_VERSION" ]] || die "active libexif-dev version mismatch"
 
   ACTIVE_LIBEXIF="$(ldconfig -p | awk '/libexif\.so\.12 \(/{ print $NF; exit }')"
   [[ -n "$ACTIVE_LIBEXIF" ]] || die "unable to locate active libexif.so.12 via ldconfig"
   ACTIVE_LIBEXIF="$(readlink -f "$ACTIVE_LIBEXIF")"
 
   extract_dir="$(mktemp -d)"
-  dpkg-deb -x "$ORIGINAL_RUNTIME_DEB" "$extract_dir"
+  dpkg-deb -x "$PACKAGE_RUNTIME_DEB" "$extract_dir"
   deb_lib="$(find "$extract_dir" -type f -path '*/libexif.so.12*' | LC_ALL=C sort | head -n1)"
   [[ -n "$deb_lib" ]] || die "unable to locate libexif.so.12 inside built runtime package"
   cmp -s "$ACTIVE_LIBEXIF" "$deb_lib" || die "installed libexif.so.12 does not match the locally built package payload"
@@ -326,7 +345,7 @@ install_original_packages() {
   printf 'ACTIVE_LIBEXIF=%s\n' "$ACTIVE_LIBEXIF"
 }
 
-build_gps_fixture_writer() {
+build_fixture_writer() {
   local output_path="$1"
 
   cat >"$output_path" <<'EOF'
@@ -475,11 +494,25 @@ int main(int argc, char **argv)
 	ExifData *exif;
 	ExifEntry *entry;
 	ExifByteOrder order = EXIF_BYTE_ORDER_INTEL;
+	const char *mode;
+	int with_gps;
+	unsigned short orientation;
 	ExifRational latitude[3] = {{33, 1}, {26, 1}, {2736, 100}};
 	ExifRational longitude[3] = {{112, 1}, {4, 1}, {2640, 100}};
 
-	if (argc != 3) {
-		fprintf(stderr, "usage: %s INPUT.jpg OUTPUT.jpg\n", argv[0]);
+	if (argc != 4) {
+		fprintf(stderr, "usage: %s MODE INPUT.jpg OUTPUT.jpg\n", argv[0]);
+		return 2;
+	}
+	mode = argv[1];
+	if (strcmp(mode, "basic") == 0) {
+		with_gps = 0;
+		orientation = 6;
+	} else if (strcmp(mode, "gps") == 0) {
+		with_gps = 1;
+		orientation = 1;
+	} else {
+		fprintf(stderr, "unknown mode: %s\n", mode);
 		return 2;
 	}
 
@@ -491,28 +524,33 @@ int main(int argc, char **argv)
 	exif_data_fix(exif);
 
 	entry = init_tag(exif, EXIF_IFD_0, EXIF_TAG_ORIENTATION);
-	exif_set_short(entry->data, order, 1);
+	exif_set_short(entry->data, order, orientation);
 	entry = init_tag(exif, EXIF_IFD_0, EXIF_TAG_DATE_TIME);
 	memcpy(entry->data, "2024:01:02 03:04:05", 20);
-	create_ascii_tag(exif, EXIF_IFD_0, EXIF_TAG_MODEL, "libexif-gps");
-	entry = init_tag(exif, EXIF_IFD_EXIF, EXIF_TAG_DATE_TIME_ORIGINAL);
-	memcpy(entry->data, "2024:01:02 03:04:05", 20);
-	entry = init_tag(exif, EXIF_IFD_EXIF, EXIF_TAG_PIXEL_X_DIMENSION);
-	exif_set_long(entry->data, order, 8);
-	entry = init_tag(exif, EXIF_IFD_EXIF, EXIF_TAG_PIXEL_Y_DIMENSION);
-	exif_set_long(entry->data, order, 6);
+	if (with_gps) {
+		create_ascii_tag(exif, EXIF_IFD_0, EXIF_TAG_MODEL, "libexif-gps");
+		entry = init_tag(exif, EXIF_IFD_EXIF, EXIF_TAG_DATE_TIME_ORIGINAL);
+		memcpy(entry->data, "2024:01:02 03:04:05", 20);
+		entry = init_tag(exif, EXIF_IFD_EXIF, EXIF_TAG_PIXEL_X_DIMENSION);
+		exif_set_long(entry->data, order, 8);
+		entry = init_tag(exif, EXIF_IFD_EXIF, EXIF_TAG_PIXEL_Y_DIMENSION);
+		exif_set_long(entry->data, order, 6);
 
-	create_ascii_tag(exif, EXIF_IFD_GPS, EXIF_TAG_GPS_LATITUDE_REF, "N");
-	create_rational_tag(exif, EXIF_IFD_GPS, EXIF_TAG_GPS_LATITUDE, 3,
-			    latitude, order);
-	create_ascii_tag(exif, EXIF_IFD_GPS, EXIF_TAG_GPS_LONGITUDE_REF, "W");
-	create_rational_tag(exif, EXIF_IFD_GPS, EXIF_TAG_GPS_LONGITUDE, 3,
-			    longitude, order);
-	create_ascii_tag(exif, EXIF_IFD_GPS, EXIF_TAG_GPS_MAP_DATUM, "WGS-84");
-	create_ascii_tag(exif, EXIF_IFD_GPS, EXIF_TAG_GPS_DATE_STAMP,
-			 "2024:01:02");
+		create_ascii_tag(exif, EXIF_IFD_GPS, EXIF_TAG_GPS_LATITUDE_REF,
+				 "N");
+		create_rational_tag(exif, EXIF_IFD_GPS, EXIF_TAG_GPS_LATITUDE, 3,
+				    latitude, order);
+		create_ascii_tag(exif, EXIF_IFD_GPS, EXIF_TAG_GPS_LONGITUDE_REF,
+				 "W");
+		create_rational_tag(exif, EXIF_IFD_GPS, EXIF_TAG_GPS_LONGITUDE, 3,
+				    longitude, order);
+		create_ascii_tag(exif, EXIF_IFD_GPS, EXIF_TAG_GPS_MAP_DATUM,
+				 "WGS-84");
+		create_ascii_tag(exif, EXIF_IFD_GPS, EXIF_TAG_GPS_DATE_STAMP,
+				 "2024:01:02");
+	}
 
-	if (copy_with_exif(argv[1], argv[2], exif) != 0) {
+	if (copy_with_exif(argv[2], argv[3], exif) != 0) {
 		exif_data_unref(exif);
 		return 1;
 	}
@@ -524,9 +562,8 @@ EOF
 }
 
 create_test_fixtures() {
-  local tmp_step1="$FIXTURE_ROOT/generated-step1.jpg"
-  local gps_writer_src="$FIXTURE_ROOT/libexif-gps-writer.c"
-  local gps_writer_bin="$FIXTURE_ROOT/libexif-gps-writer"
+  local fixture_writer_src="$FIXTURE_ROOT/libexif-fixture-writer.c"
+  local fixture_writer_bin="$FIXTURE_ROOT/libexif-fixture-writer"
 
   log_step "Creating test fixtures"
 
@@ -534,11 +571,10 @@ create_test_fixtures() {
   mkdir -p "$FIXTURE_ROOT" "$GPHOTO_FIXTURE_DIR" "$TEST_ROOT"
 
   convert -size 8x6 xc:red "$FIXTURE_ROOT/plain.jpg"
-  exif --create-exif --ifd=0 --tag Orientation --set-value 6 -o "$tmp_step1" "$FIXTURE_ROOT/plain.jpg" >/tmp/libexif-fixture-create.log 2>&1
-  exif --ifd=0 --tag DateTime --set-value '2024:01:02 03:04:05' -o "$GENERATED_FIXTURE" "$tmp_step1" >/tmp/libexif-fixture-update.log 2>&1
-  build_gps_fixture_writer "$gps_writer_src"
-  cc -Wall -Wextra -o "$gps_writer_bin" "$gps_writer_src" $(pkg-config --cflags --libs libexif)
-  "$gps_writer_bin" "$FIXTURE_ROOT/plain.jpg" "$GPS_FIXTURE"
+  build_fixture_writer "$fixture_writer_src"
+  cc -Wall -Wextra -o "$fixture_writer_bin" "$fixture_writer_src" $(pkg-config --cflags --libs libexif)
+  "$fixture_writer_bin" basic "$FIXTURE_ROOT/plain.jpg" "$GENERATED_FIXTURE"
+  "$fixture_writer_bin" gps "$FIXTURE_ROOT/plain.jpg" "$GPS_FIXTURE"
   cp "$FUJI_FIXTURE" "$GPHOTO_FIXTURE_DIR/fuji.jpg"
 
   require_nonempty_file "$GENERATED_FIXTURE"
@@ -1734,8 +1770,8 @@ run_named_test() {
 }
 
 validate_dependents
-build_original_packages
-install_original_packages
+build_safe_packages
+install_safe_packages
 create_test_fixtures
 
 run_named_test "exif" test_exif

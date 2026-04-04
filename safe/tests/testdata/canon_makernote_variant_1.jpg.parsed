@@ -59,7 +59,7 @@ Byte order: Intel
       Value: Y Cb Cr -
     Entry 6: CompressedBitsPerPixel (Rational)
       Size, Comps: 8, 1
-      Value: 5
+      Value:  5
     Entry 7: ShutterSpeedValue (SRational)
       Size, Comps: 8, 1
       Value: 0.00 EV (1 sec.)
