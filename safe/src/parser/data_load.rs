@@ -412,6 +412,10 @@ fn parse_payload(data: *mut ExifData, payload: &[u8]) -> Result<(), ParseError> 
         }
     }
 
+    unsafe {
+        crate::mnote::interpret_maker_note_impl(data, payload.as_ptr(), payload.len());
+    }
+
     if (unsafe { exif_data_get_options_impl(data) }
         & crate::ffi::types::EXIF_DATA_OPTION_FOLLOW_SPECIFICATION)
         != 0

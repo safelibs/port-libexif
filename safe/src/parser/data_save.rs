@@ -121,11 +121,17 @@ fn visible_entries(content: *mut ExifContent) -> Vec<*mut ExifEntry> {
 }
 
 fn write_raw_entry(
+    data: *mut ExifData,
     order: ExifByteOrder,
     buffer: &mut Vec<u8>,
     record_offset: usize,
     entry: *mut ExifEntry,
 ) -> Result<(), ParseError> {
+    let next_data_offset = current_offset(buffer)? as c_uint;
+    unsafe {
+        crate::mnote::prepare_maker_note_for_save_impl(data, entry, next_data_offset);
+    }
+
     let components = usize::try_from(unsafe { (*entry).components })
         .map_err(|_| ParseError::Overflow("EXIF component count does not fit usize"))?;
     let format = unsafe { (*entry).format };
@@ -240,7 +246,7 @@ fn save_ifd(
     let entries_offset = directory_offset + 2;
     let mut cursor = 0usize;
     for entry in entries {
-        write_raw_entry(order, buffer, entries_offset + cursor * 12, entry)?;
+        write_raw_entry(data, order, buffer, entries_offset + cursor * 12, entry)?;
         cursor += 1;
     }
 

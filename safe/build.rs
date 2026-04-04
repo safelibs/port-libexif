@@ -19,6 +19,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     println!("cargo:rerun-if-changed=tests/support/libexif/i18n.h");
     println!("cargo:rerun-if-changed=cshim/exif-log-shim.c");
     println!("cargo:rerun-if-changed=include/libexif/exif-log.h");
+    emit_mnote_rerun_hints();
 
     let symbols_path = Path::new("../original/libexif/libexif.sym");
     let symbols = parse_symbol_list(&fs::read_to_string(symbols_path)?)?;
@@ -32,6 +33,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         .file("cshim/exif-log-shim.c")
         .include("include")
         .compile("exif-log-shim");
+    build_mnote_helpers();
 
     if env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("linux") {
         println!("cargo:rustc-cdylib-link-arg=-Wl,-soname,{SONAME}");
@@ -42,6 +44,186 @@ fn main() -> Result<(), Box<dyn Error>> {
     }
 
     Ok(())
+}
+
+fn emit_mnote_rerun_hints() {
+    for path in [
+        "../original/libexif/apple/exif-mnote-data-apple.c",
+        "../original/libexif/apple/mnote-apple-entry.c",
+        "../original/libexif/apple/mnote-apple-tag.c",
+        "../original/libexif/canon/exif-mnote-data-canon.c",
+        "../original/libexif/canon/mnote-canon-entry.c",
+        "../original/libexif/canon/mnote-canon-tag.c",
+        "../original/libexif/fuji/exif-mnote-data-fuji.c",
+        "../original/libexif/fuji/mnote-fuji-entry.c",
+        "../original/libexif/fuji/mnote-fuji-tag.c",
+        "../original/libexif/olympus/exif-mnote-data-olympus.c",
+        "../original/libexif/olympus/mnote-olympus-entry.c",
+        "../original/libexif/olympus/mnote-olympus-tag.c",
+        "../original/libexif/pentax/exif-mnote-data-pentax.c",
+        "../original/libexif/pentax/mnote-pentax-entry.c",
+        "../original/libexif/pentax/mnote-pentax-tag.c",
+    ] {
+        println!("cargo:rerun-if-changed={path}");
+    }
+}
+
+fn build_mnote_helpers() {
+    compile_mnote_helper(
+        "exif-mnote-helper-apple",
+        &[
+            "../original/libexif/apple/exif-mnote-data-apple.c",
+            "../original/libexif/apple/mnote-apple-entry.c",
+            "../original/libexif/apple/mnote-apple-tag.c",
+        ],
+        &[
+            (
+                "exif_mnote_data_apple_identify",
+                "safe_helper_exif_mnote_data_apple_identify",
+            ),
+            ("exif_mnote_data_apple_new", "safe_helper_exif_mnote_data_apple_new"),
+            ("mnote_apple_entry_get_value", "safe_helper_mnote_apple_entry_get_value"),
+            ("mnote_apple_tag_get_name", "safe_helper_mnote_apple_tag_get_name"),
+            ("mnote_apple_tag_get_title", "safe_helper_mnote_apple_tag_get_title"),
+            (
+                "mnote_apple_tag_get_description",
+                "safe_helper_mnote_apple_tag_get_description",
+            ),
+        ],
+    );
+    compile_mnote_helper(
+        "exif-mnote-helper-canon",
+        &[
+            "../original/libexif/canon/exif-mnote-data-canon.c",
+            "../original/libexif/canon/mnote-canon-entry.c",
+            "../original/libexif/canon/mnote-canon-tag.c",
+        ],
+        &[
+            (
+                "exif_mnote_data_canon_identify",
+                "safe_helper_exif_mnote_data_canon_identify",
+            ),
+            ("exif_mnote_data_canon_new", "safe_helper_exif_mnote_data_canon_new"),
+            (
+                "mnote_canon_entry_count_values",
+                "safe_helper_mnote_canon_entry_count_values",
+            ),
+            ("mnote_canon_entry_get_value", "safe_helper_mnote_canon_entry_get_value"),
+            ("mnote_canon_tag_get_name", "safe_helper_mnote_canon_tag_get_name"),
+            (
+                "mnote_canon_tag_get_name_sub",
+                "safe_helper_mnote_canon_tag_get_name_sub",
+            ),
+            ("mnote_canon_tag_get_title", "safe_helper_mnote_canon_tag_get_title"),
+            (
+                "mnote_canon_tag_get_title_sub",
+                "safe_helper_mnote_canon_tag_get_title_sub",
+            ),
+            (
+                "mnote_canon_tag_get_description",
+                "safe_helper_mnote_canon_tag_get_description",
+            ),
+        ],
+    );
+    compile_mnote_helper(
+        "exif-mnote-helper-fuji",
+        &[
+            "../original/libexif/fuji/exif-mnote-data-fuji.c",
+            "../original/libexif/fuji/mnote-fuji-entry.c",
+            "../original/libexif/fuji/mnote-fuji-tag.c",
+        ],
+        &[
+            (
+                "exif_mnote_data_fuji_identify",
+                "safe_helper_exif_mnote_data_fuji_identify",
+            ),
+            ("exif_mnote_data_fuji_new", "safe_helper_exif_mnote_data_fuji_new"),
+            ("mnote_fuji_entry_get_value", "safe_helper_mnote_fuji_entry_get_value"),
+            ("mnote_fuji_tag_get_name", "safe_helper_mnote_fuji_tag_get_name"),
+            ("mnote_fuji_tag_get_title", "safe_helper_mnote_fuji_tag_get_title"),
+            (
+                "mnote_fuji_tag_get_description",
+                "safe_helper_mnote_fuji_tag_get_description",
+            ),
+        ],
+    );
+    compile_mnote_helper(
+        "exif-mnote-helper-olympus",
+        &[
+            "../original/libexif/olympus/exif-mnote-data-olympus.c",
+            "../original/libexif/olympus/mnote-olympus-entry.c",
+            "../original/libexif/olympus/mnote-olympus-tag.c",
+        ],
+        &[
+            (
+                "exif_mnote_data_olympus_identify",
+                "safe_helper_exif_mnote_data_olympus_identify",
+            ),
+            (
+                "exif_mnote_data_olympus_new",
+                "safe_helper_exif_mnote_data_olympus_new",
+            ),
+            (
+                "mnote_olympus_entry_get_value",
+                "safe_helper_mnote_olympus_entry_get_value",
+            ),
+            ("mnote_olympus_tag_get_name", "safe_helper_mnote_olympus_tag_get_name"),
+            (
+                "mnote_olympus_tag_get_title",
+                "safe_helper_mnote_olympus_tag_get_title",
+            ),
+            (
+                "mnote_olympus_tag_get_description",
+                "safe_helper_mnote_olympus_tag_get_description",
+            ),
+        ],
+    );
+    compile_mnote_helper(
+        "exif-mnote-helper-pentax",
+        &[
+            "../original/libexif/pentax/exif-mnote-data-pentax.c",
+            "../original/libexif/pentax/mnote-pentax-entry.c",
+            "../original/libexif/pentax/mnote-pentax-tag.c",
+        ],
+        &[
+            (
+                "exif_mnote_data_pentax_identify",
+                "safe_helper_exif_mnote_data_pentax_identify",
+            ),
+            (
+                "exif_mnote_data_pentax_new",
+                "safe_helper_exif_mnote_data_pentax_new",
+            ),
+            (
+                "mnote_pentax_entry_get_value",
+                "safe_helper_mnote_pentax_entry_get_value",
+            ),
+            ("mnote_pentax_tag_get_name", "safe_helper_mnote_pentax_tag_get_name"),
+            ("mnote_pentax_tag_get_title", "safe_helper_mnote_pentax_tag_get_title"),
+            (
+                "mnote_pentax_tag_get_description",
+                "safe_helper_mnote_pentax_tag_get_description",
+            ),
+        ],
+    );
+}
+
+fn compile_mnote_helper(name: &str, files: &[&str], defines: &[(&str, &str)]) {
+    let mut build = cc::Build::new();
+    build
+        .include("tests/support")
+        .include("../original")
+        .include("include")
+        .warnings(false);
+
+    for file in files {
+        build.file(file);
+    }
+    for (key, value) in defines {
+        build.define(key, Some(*value));
+    }
+
+    build.compile(name);
 }
 
 fn parse_symbol_list(contents: &str) -> Result<Vec<String>, io::Error> {

@@ -130,6 +130,31 @@ pub(crate) unsafe fn exif_data_get_mnote_data_impl(data: *mut ExifData) -> *mut 
     }
 }
 
+pub(crate) unsafe fn exif_data_set_mnote_data_impl(data: *mut ExifData, note: *mut ExifMnoteData) {
+    if data.is_null() || unsafe { (*data).priv_ }.is_null() {
+        return;
+    }
+
+    let private = unsafe { data_private(data) };
+    unsafe {
+        if (*private).md == note {
+            return;
+        }
+        if !(*private).md.is_null() {
+            crate::exif_mnote_data_unref((*private).md);
+        }
+        (*private).md = note;
+    }
+}
+
+pub(crate) unsafe fn exif_data_get_mnote_offset_impl(data: *mut ExifData) -> c_uint {
+    if data.is_null() || unsafe { (*data).priv_ }.is_null() {
+        0
+    } else {
+        unsafe { (*data_private(data)).offset_mnote }
+    }
+}
+
 pub(crate) unsafe fn exif_data_get_byte_order_impl(data: *mut ExifData) -> ExifByteOrder {
     if data.is_null() || unsafe { (*data).priv_ }.is_null() {
         EXIF_BYTE_ORDER_MOTOROLA
