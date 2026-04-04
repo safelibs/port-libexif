@@ -20,24 +20,48 @@ if [[ -f "$deps_dir/libexif.so" ]]; then
 fi
 
 sources=()
+binary_args=()
+
+resolve_source() {
+    local source=$1
+    local candidate
+
+    if [[ -f "$source" && "$source" == *.c ]]; then
+        printf '%s\n' "$source"
+        return 0
+    fi
+
+    candidate="$script_dir/original-c/$source"
+    if [[ -f "$candidate" && "$candidate" == *.c ]]; then
+        printf '%s\n' "$candidate"
+        return 0
+    fi
+
+    if [[ "$source" != *.c ]]; then
+        candidate="$script_dir/original-c/${source}.c"
+        if [[ -f "$candidate" ]]; then
+            printf '%s\n' "$candidate"
+            return 0
+        fi
+    fi
+
+    return 1
+}
+
 if [[ $# -eq 0 ]]; then
     while IFS= read -r -d '' source; do
         sources+=("$source")
     done < <(find "$script_dir/original-c" -maxdepth 1 -name '*.c' ! -name 'test-null.c' -print0 | sort -z)
 else
-    for source in "$@"; do
-        candidate="$source"
-        if [[ ! -f "$candidate" ]]; then
-            candidate="$script_dir/original-c/$source"
+    while [[ $# -gt 0 ]]; do
+        if candidate=$(resolve_source "$1"); then
+            sources+=("$candidate")
+            shift
+            continue
         fi
-        if [[ ! -f "$candidate" && "$candidate" != *.c ]]; then
-            candidate="${candidate}.c"
-        fi
-        if [[ ! -f "$candidate" ]]; then
-            echo "unknown C test: $source" >&2
-            exit 1
-        fi
-        sources+=("$candidate")
+
+        binary_args=("$@")
+        break
     done
 fi
 
@@ -65,5 +89,5 @@ for source in "${sources[@]}"; do
     LD_LIBRARY_PATH="$deps_dir${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" \
     DYLD_LIBRARY_PATH="$deps_dir${DYLD_LIBRARY_PATH:+:$DYLD_LIBRARY_PATH}" \
     PATH="$deps_dir${PATH:+:$PATH}" \
-    "$binary"
+    "$binary" "${binary_args[@]}"
 done
