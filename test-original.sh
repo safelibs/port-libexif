@@ -2,7 +2,7 @@
 set -euo pipefail
 
 ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
-PHASE_ID="impl_05_downstream_compile"
+PHASE_ID="impl_06_downstream_cli_library"
 IMAGE_LABEL_KEY="io.safelibs.libexif.image-inputs-sha256"
 IMAGE_TAG="${LIBEXIF_ORIGINAL_TEST_IMAGE:-libexif-original-test:${PHASE_ID}}"
 DOWNSTREAM_PACKAGE_ROOT="${LIBEXIF_DOWNSTREAM_PACKAGE_ROOT:-$ROOT/safe/.artifacts/${PHASE_ID}}"
@@ -462,7 +462,7 @@ validate_dependents() {
   fi
 
   if [[ "$MODE" == "runtime" && -n "$ONLY_FILTER" ]] && ! is_runtime_dependent "$ONLY_FILTER"; then
-    die "runtime mode is not supported for $ONLY_FILTER"
+    die "compile-only dependent: $ONLY_FILTER only supports --mode compile"
   fi
 }
 
