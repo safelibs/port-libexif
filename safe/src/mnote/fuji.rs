@@ -430,7 +430,7 @@ unsafe extern "C" {
 }
 
 #[inline]
-unsafe fn fuji_note(note: *mut ExifMnoteData) -> *mut ExifMnoteDataFuji {
+fn fuji_note(note: *mut ExifMnoteData) -> *mut ExifMnoteDataFuji {
     note.cast()
 }
 
@@ -490,7 +490,7 @@ unsafe extern "C" fn exif_mnote_data_fuji_get_value(
     value: *mut c_char,
     maxlen: c_uint,
 ) -> *mut c_char {
-    let note = unsafe { fuji_note(note) };
+    let note = fuji_note(note);
     if note.is_null() || value.is_null() || unsafe { index >= (*note).count } {
         return ptr::null_mut();
     }
@@ -694,7 +694,7 @@ unsafe extern "C" fn exif_mnote_data_fuji_save(
     buffer: *mut *mut c_uchar,
     buffer_size: *mut c_uint,
 ) {
-    let note = unsafe { fuji_note(note) };
+    let note = fuji_note(note);
     if note.is_null() || buffer.is_null() || buffer_size.is_null() {
         return;
     }
@@ -777,7 +777,7 @@ unsafe extern "C" fn exif_mnote_data_fuji_load(
     buffer: *const c_uchar,
     buffer_size: c_uint,
 ) {
-    let note = unsafe { fuji_note(note) };
+    let note = fuji_note(note);
     let buffer_size = buffer_size as usize;
     if note.is_null() || buffer.is_null() || buffer_size == 0 {
         if !note.is_null() {
@@ -913,7 +913,7 @@ unsafe extern "C" fn exif_mnote_data_fuji_load(
 }
 
 unsafe extern "C" fn exif_mnote_data_fuji_count(note: *mut ExifMnoteData) -> c_uint {
-    let note = unsafe { fuji_note(note) };
+    let note = fuji_note(note);
     if note.is_null() {
         0
     } else {
@@ -925,7 +925,7 @@ unsafe extern "C" fn exif_mnote_data_fuji_get_id(
     note: *mut ExifMnoteData,
     index: c_uint,
 ) -> c_uint {
-    let note = unsafe { fuji_note(note) };
+    let note = fuji_note(note);
     if note.is_null() || unsafe { (*note).count <= index } {
         0
     } else {
@@ -937,7 +937,7 @@ unsafe extern "C" fn exif_mnote_data_fuji_get_name(
     note: *mut ExifMnoteData,
     index: c_uint,
 ) -> *const c_char {
-    let note = unsafe { fuji_note(note) };
+    let note = fuji_note(note);
     if note.is_null() || unsafe { index >= (*note).count } {
         return ptr::null();
     }
@@ -948,7 +948,7 @@ unsafe extern "C" fn exif_mnote_data_fuji_get_title(
     note: *mut ExifMnoteData,
     index: c_uint,
 ) -> *const c_char {
-    let note = unsafe { fuji_note(note) };
+    let note = fuji_note(note);
     if note.is_null() || unsafe { index >= (*note).count } {
         return ptr::null();
     }
@@ -959,7 +959,7 @@ unsafe extern "C" fn exif_mnote_data_fuji_get_description(
     note: *mut ExifMnoteData,
     index: c_uint,
 ) -> *const c_char {
-    let note = unsafe { fuji_note(note) };
+    let note = fuji_note(note);
     if note.is_null() || unsafe { index >= (*note).count } {
         return ptr::null();
     }
@@ -970,7 +970,7 @@ unsafe extern "C" fn exif_mnote_data_fuji_set_byte_order(
     note: *mut ExifMnoteData,
     order: ExifByteOrder,
 ) {
-    let note = unsafe { fuji_note(note) };
+    let note = fuji_note(note);
     if note.is_null() {
         return;
     }
@@ -1000,7 +1000,7 @@ unsafe extern "C" fn exif_mnote_data_fuji_set_byte_order(
 }
 
 unsafe extern "C" fn exif_mnote_data_fuji_set_offset(note: *mut ExifMnoteData, offset: c_uint) {
-    let note = unsafe { fuji_note(note) };
+    let note = fuji_note(note);
     if !note.is_null() {
         unsafe { (*note).offset = offset };
     }

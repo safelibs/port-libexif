@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-phase_id=impl_07_downstream_gui_services
+phase_id=impl_08_safety_perf_docs
 script_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 safe_dir=$(cd "$script_dir/.." && pwd)
 repo_root=$(cd "$safe_dir/.." && pwd)
@@ -37,10 +37,15 @@ print_package_input_paths() {
         safe/COPYING \
         safe/README \
         safe/NEWS \
+        safe/SAFETY.md \
         safe/SECURITY.md \
         safe/libexif.pc.in \
         safe/libexif-uninstalled.pc.in \
-        safe/tests/run-package-build.sh
+        safe/tests/run-package-build.sh \
+        safe/tests/run-performance-compare.sh \
+        safe/tests/perf/bench-driver.c \
+        safe/tests/perf/fixture-manifest.txt \
+        safe/tests/perf/thresholds.env
 
     find "$safe_dir/src" -type f -printf 'safe/src/%P\n'
     find "$safe_dir/cshim" -type f -printf 'safe/cshim/%P\n'
@@ -55,11 +60,6 @@ print_package_input_paths() {
         original/libexif/libexif.sym \
         original/libexif/exif-tag.c
     find "$repo_root/original/libexif" -maxdepth 1 -type f -name '*.h' -printf 'original/libexif/%f\n'
-    find "$repo_root/original/libexif/apple" -type f \( -name '*.c' -o -name '*.h' \) -printf 'original/libexif/apple/%f\n'
-    find "$repo_root/original/libexif/canon" -type f \( -name '*.c' -o -name '*.h' \) -printf 'original/libexif/canon/%f\n'
-    find "$repo_root/original/libexif/fuji" -type f \( -name '*.c' -o -name '*.h' \) -printf 'original/libexif/fuji/%f\n'
-    find "$repo_root/original/libexif/olympus" -type f \( -name '*.c' -o -name '*.h' \) -printf 'original/libexif/olympus/%f\n'
-    find "$repo_root/original/libexif/pentax" -type f \( -name '*.c' -o -name '*.h' \) -printf 'original/libexif/pentax/%f\n'
 }
 
 move_artifact() {

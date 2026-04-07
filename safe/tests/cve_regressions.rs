@@ -7,7 +7,7 @@ unsafe extern "C" {
     fn exif_content_add_entry(content: *mut ExifContent, entry: *mut ExifEntry);
     fn exif_content_remove_entry(content: *mut ExifContent, entry: *mut ExifEntry);
     fn exif_data_get_mnote_data(data: *mut ExifData) -> *mut ExifMnoteData;
-    fn exif_data_new() -> *mut ExifData;
+    safe fn exif_data_new() -> *mut ExifData;
     fn exif_data_new_from_data(source: *const u8, size: u32) -> *mut ExifData;
     fn exif_data_set_byte_order(data: *mut ExifData, order: ExifByteOrder);
     fn exif_data_unref(data: *mut ExifData);
@@ -17,9 +17,9 @@ unsafe extern "C" {
         maxlen: u32,
     ) -> *const c_char;
     fn exif_entry_initialize(entry: *mut ExifEntry, tag: ExifTag);
-    fn exif_entry_new() -> *mut ExifEntry;
+    safe fn exif_entry_new() -> *mut ExifEntry;
     fn exif_entry_unref(entry: *mut ExifEntry);
-    fn exif_mem_new_default() -> *mut ExifMem;
+    safe fn exif_mem_new_default() -> *mut ExifMem;
     fn exif_mem_unref(mem: *mut ExifMem);
     fn exif_mnote_data_canon_new(mem: *mut ExifMem, option: ExifDataOption) -> *mut ExifMnoteData;
     fn exif_mnote_data_count(note: *mut ExifMnoteData) -> u32;
@@ -28,17 +28,17 @@ unsafe extern "C" {
     fn exif_mnote_data_set_offset(note: *mut ExifMnoteData, offset: u32);
     fn exif_mnote_data_unref(note: *mut ExifMnoteData);
     fn exif_set_rational(buffer: *mut u8, order: ExifByteOrder, value: ExifRational);
-    fn mnote_canon_tag_get_description(tag: MnoteCanonTag) -> *const c_char;
-    fn mnote_canon_tag_get_name(tag: MnoteCanonTag) -> *const c_char;
-    fn mnote_canon_tag_get_title(tag: MnoteCanonTag) -> *const c_char;
+    safe fn mnote_canon_tag_get_description(tag: MnoteCanonTag) -> *const c_char;
+    safe fn mnote_canon_tag_get_name(tag: MnoteCanonTag) -> *const c_char;
+    safe fn mnote_canon_tag_get_title(tag: MnoteCanonTag) -> *const c_char;
     fn mnote_olympus_entry_get_value(
         entry: *mut MnoteOlympusEntry,
         value: *mut c_char,
         maxlen: u32,
     ) -> *mut c_char;
-    fn mnote_olympus_tag_get_description(tag: MnoteOlympusTag) -> *const c_char;
-    fn mnote_olympus_tag_get_name(tag: MnoteOlympusTag) -> *const c_char;
-    fn mnote_olympus_tag_get_title(tag: MnoteOlympusTag) -> *const c_char;
+    safe fn mnote_olympus_tag_get_description(tag: MnoteOlympusTag) -> *const c_char;
+    safe fn mnote_olympus_tag_get_name(tag: MnoteOlympusTag) -> *const c_char;
+    safe fn mnote_olympus_tag_get_title(tag: MnoteOlympusTag) -> *const c_char;
 }
 
 const EXIF_TAG_IMAGE_DESCRIPTION: ExifTag = 0x010e;
@@ -63,7 +63,7 @@ impl ExifDataHandle {
     }
 
     fn fresh() -> Self {
-        let ptr = unsafe { exif_data_new() };
+        let ptr = exif_data_new();
         assert!(!ptr.is_null(), "failed to allocate ExifData");
         Self(ptr)
     }
@@ -83,7 +83,7 @@ struct ExifMnoteHandle(*mut ExifMnoteData);
 
 impl ExifMnoteHandle {
     fn new_canon() -> (Self, *mut ExifMem) {
-        let mem = unsafe { exif_mem_new_default() };
+        let mem = exif_mem_new_default();
         assert!(!mem.is_null(), "failed to allocate ExifMem");
         let note = unsafe { exif_mnote_data_canon_new(mem, 0) };
         assert!(!note.is_null(), "failed to allocate Canon MakerNote");
@@ -290,7 +290,7 @@ fn cve_2020_0198_entry_payload_overflow_is_rejected() {
 fn cve_2020_12767_entry_value_zero_denominator_falls_back_to_fraction() {
     let data = ExifDataHandle::fresh();
     let content = unsafe { (*data.as_ptr()).ifd[EXIF_IFD_EXIF as usize] };
-    let entry = unsafe { exif_entry_new() };
+    let entry = exif_entry_new();
     assert!(!content.is_null());
     assert!(!entry.is_null());
 
@@ -337,27 +337,23 @@ fn cve_2020_13114_canon_makernote_tag_limit_prevents_expansion_abuse() {
 #[test]
 fn maker_note_canon_tag_metadata_matches_upstream_visible_tags() {
     assert_eq!(
-        c_ptr_to_string(unsafe { mnote_canon_tag_get_name(MNOTE_CANON_TAG_FILE_LENGTH) })
-            .as_deref(),
+        c_ptr_to_string(mnote_canon_tag_get_name(MNOTE_CANON_TAG_FILE_LENGTH)).as_deref(),
         Some("FileLength")
     );
     assert_eq!(
-        c_ptr_to_string(unsafe { mnote_canon_tag_get_title(MNOTE_CANON_TAG_FILE_LENGTH) })
-            .as_deref(),
+        c_ptr_to_string(mnote_canon_tag_get_title(MNOTE_CANON_TAG_FILE_LENGTH)).as_deref(),
         Some("File Length")
     );
     assert_eq!(
-        c_ptr_to_string(unsafe { mnote_canon_tag_get_description(MNOTE_CANON_TAG_FILE_LENGTH) })
-            .as_deref(),
+        c_ptr_to_string(mnote_canon_tag_get_description(MNOTE_CANON_TAG_FILE_LENGTH)).as_deref(),
         Some("")
     );
     assert_eq!(
-        c_ptr_to_string(unsafe { mnote_canon_tag_get_name(MNOTE_CANON_TAG_MOVIE_INFO) }).as_deref(),
+        c_ptr_to_string(mnote_canon_tag_get_name(MNOTE_CANON_TAG_MOVIE_INFO)).as_deref(),
         Some("MovieInfo")
     );
     assert_eq!(
-        c_ptr_to_string(unsafe { mnote_canon_tag_get_title(MNOTE_CANON_TAG_MOVIE_INFO) })
-            .as_deref(),
+        c_ptr_to_string(mnote_canon_tag_get_title(MNOTE_CANON_TAG_MOVIE_INFO)).as_deref(),
         Some("Movie Info")
     );
 }
@@ -365,18 +361,18 @@ fn maker_note_canon_tag_metadata_matches_upstream_visible_tags() {
 #[test]
 fn maker_note_olympus_tag_metadata_matches_upstream_visible_tags() {
     assert_eq!(
-        c_ptr_to_string(unsafe { mnote_olympus_tag_get_name(MNOTE_OLYMPUS_TAG_MANFOCUS) })
-            .as_deref(),
+        c_ptr_to_string(mnote_olympus_tag_get_name(MNOTE_OLYMPUS_TAG_MANFOCUS)).as_deref(),
         Some("FocusMode")
     );
     assert_eq!(
-        c_ptr_to_string(unsafe { mnote_olympus_tag_get_title(MNOTE_OLYMPUS_TAG_MANFOCUS) })
-            .as_deref(),
+        c_ptr_to_string(mnote_olympus_tag_get_title(MNOTE_OLYMPUS_TAG_MANFOCUS)).as_deref(),
         Some("Focus Mode")
     );
     assert_eq!(
-        c_ptr_to_string(unsafe { mnote_olympus_tag_get_description(MNOTE_OLYMPUS_TAG_MANFOCUS) })
-            .as_deref(),
+        c_ptr_to_string(mnote_olympus_tag_get_description(
+            MNOTE_OLYMPUS_TAG_MANFOCUS
+        ))
+        .as_deref(),
         Some("Automatic or manual focusing mode")
     );
 }

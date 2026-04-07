@@ -545,7 +545,7 @@ unsafe extern "C" {
 }
 
 #[inline]
-unsafe fn olympus_note(note: *mut ExifMnoteData) -> *mut ExifMnoteDataOlympus {
+fn olympus_note(note: *mut ExifMnoteData) -> *mut ExifMnoteDataOlympus {
     note.cast()
 }
 
@@ -1707,7 +1707,7 @@ unsafe extern "C" fn exif_mnote_data_olympus_get_value(
     value: *mut c_char,
     maxlen: c_uint,
 ) -> *mut c_char {
-    let note = unsafe { olympus_note(note) };
+    let note = olympus_note(note);
     if note.is_null() || unsafe { index >= (*note).count } {
         return ptr::null_mut();
     }
@@ -1719,7 +1719,7 @@ unsafe extern "C" fn exif_mnote_data_olympus_save(
     buffer: *mut *mut c_uchar,
     buffer_size: *mut c_uint,
 ) {
-    let note = unsafe { olympus_note(note) };
+    let note = olympus_note(note);
     if note.is_null() || buffer.is_null() || buffer_size.is_null() {
         return;
     }
@@ -1894,7 +1894,7 @@ unsafe extern "C" fn exif_mnote_data_olympus_load(
     buffer: *const c_uchar,
     buffer_size: c_uint,
 ) {
-    let note = unsafe { olympus_note(note) };
+    let note = olympus_note(note);
     let buffer_size = buffer_size as usize;
     if note.is_null() || buffer.is_null() || buffer_size == 0 {
         if !note.is_null() {
@@ -1911,9 +1911,7 @@ unsafe extern "C" fn exif_mnote_data_olympus_load(
         return;
     }
 
-    unsafe {
-        (*note).version = identify_variant(unsafe { buffer.add(o2) }, (buffer_size - o2) as c_uint)
-    };
+    unsafe { (*note).version = identify_variant(buffer.add(o2), (buffer_size - o2) as c_uint) };
     match unsafe { (*note).version } {
         OLYMPUS_V1 | SANYO_V1 | EPSON_V1 => {
             let bytes = unsafe { std::slice::from_raw_parts(buffer.add(o2), 8) };
@@ -2116,7 +2114,7 @@ unsafe extern "C" fn exif_mnote_data_olympus_load(
 }
 
 unsafe extern "C" fn exif_mnote_data_olympus_count(note: *mut ExifMnoteData) -> c_uint {
-    let note = unsafe { olympus_note(note) };
+    let note = olympus_note(note);
     if note.is_null() {
         0
     } else {
@@ -2128,7 +2126,7 @@ unsafe extern "C" fn exif_mnote_data_olympus_get_id(
     note: *mut ExifMnoteData,
     index: c_uint,
 ) -> c_uint {
-    let note = unsafe { olympus_note(note) };
+    let note = olympus_note(note);
     if note.is_null() || unsafe { (*note).count <= index } {
         0
     } else {
@@ -2140,7 +2138,7 @@ unsafe extern "C" fn exif_mnote_data_olympus_get_name(
     note: *mut ExifMnoteData,
     index: c_uint,
 ) -> *const c_char {
-    let note = unsafe { olympus_note(note) };
+    let note = olympus_note(note);
     if note.is_null() || unsafe { index >= (*note).count } {
         return ptr::null();
     }
@@ -2152,7 +2150,7 @@ unsafe extern "C" fn exif_mnote_data_olympus_get_title(
     note: *mut ExifMnoteData,
     index: c_uint,
 ) -> *const c_char {
-    let note = unsafe { olympus_note(note) };
+    let note = olympus_note(note);
     if note.is_null() || unsafe { index >= (*note).count } {
         return ptr::null();
     }
@@ -2164,7 +2162,7 @@ unsafe extern "C" fn exif_mnote_data_olympus_get_description(
     note: *mut ExifMnoteData,
     index: c_uint,
 ) -> *const c_char {
-    let note = unsafe { olympus_note(note) };
+    let note = olympus_note(note);
     if note.is_null() || unsafe { index >= (*note).count } {
         ptr::null()
     } else {
@@ -2177,7 +2175,7 @@ unsafe extern "C" fn exif_mnote_data_olympus_set_byte_order(
     note: *mut ExifMnoteData,
     order: ExifByteOrder,
 ) {
-    let note = unsafe { olympus_note(note) };
+    let note = olympus_note(note);
     if note.is_null() {
         return;
     }
@@ -2205,7 +2203,7 @@ unsafe extern "C" fn exif_mnote_data_olympus_set_byte_order(
 }
 
 unsafe extern "C" fn exif_mnote_data_olympus_set_offset(note: *mut ExifMnoteData, offset: c_uint) {
-    let note = unsafe { olympus_note(note) };
+    let note = olympus_note(note);
     if !note.is_null() {
         unsafe { (*note).offset = offset };
     }
@@ -3068,16 +3066,16 @@ pub unsafe extern "C" fn mnote_olympus_entry_get_value(
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn mnote_olympus_tag_get_description(tag: MnoteOlympusTag) -> *const c_char {
+pub extern "C" fn mnote_olympus_tag_get_description(tag: MnoteOlympusTag) -> *const c_char {
     panic_boundary::call_or(ptr::null(), || olympus_tag_description_impl(tag))
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn mnote_olympus_tag_get_name(tag: MnoteOlympusTag) -> *const c_char {
+pub extern "C" fn mnote_olympus_tag_get_name(tag: MnoteOlympusTag) -> *const c_char {
     panic_boundary::call_or(ptr::null(), || olympus_tag_name_impl(tag))
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn mnote_olympus_tag_get_title(tag: MnoteOlympusTag) -> *const c_char {
+pub extern "C" fn mnote_olympus_tag_get_title(tag: MnoteOlympusTag) -> *const c_char {
     panic_boundary::call_or(ptr::null(), || olympus_tag_title_impl(tag))
 }

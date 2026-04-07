@@ -6,7 +6,7 @@ use std::slice;
 use exif::ffi::types::*;
 
 unsafe extern "C" {
-    fn exif_data_new() -> *mut ExifData;
+    safe fn exif_data_new() -> *mut ExifData;
     fn exif_data_unref(data: *mut ExifData);
     fn exif_data_fix(data: *mut ExifData);
     fn exif_data_get_data_type(data: *mut ExifData) -> ExifDataType;
@@ -16,7 +16,7 @@ unsafe extern "C" {
     fn exif_content_remove_entry(content: *mut ExifContent, entry: *mut ExifEntry);
     fn exif_content_get_entry(content: *mut ExifContent, tag: ExifTag) -> *mut ExifEntry;
     fn exif_content_get_ifd(content: *mut ExifContent) -> ExifIfd;
-    fn exif_entry_new() -> *mut ExifEntry;
+    safe fn exif_entry_new() -> *mut ExifEntry;
     fn exif_entry_new_mem(mem: *mut ExifMem) -> *mut ExifEntry;
     fn exif_entry_unref(entry: *mut ExifEntry);
     fn exif_entry_initialize(entry: *mut ExifEntry, tag: ExifTag);
@@ -25,7 +25,7 @@ unsafe extern "C" {
         value: *mut c_char,
         maxlen: u32,
     ) -> *const c_char;
-    fn exif_mem_new_default() -> *mut ExifMem;
+    safe fn exif_mem_new_default() -> *mut ExifMem;
     fn exif_mem_unref(mem: *mut ExifMem);
     fn exif_mem_alloc(mem: *mut ExifMem, size: ExifLong) -> *mut c_void;
     fn exif_mem_free(mem: *mut ExifMem, ptr_: *mut c_void);

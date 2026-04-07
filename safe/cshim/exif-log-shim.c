@@ -2,6 +2,7 @@
 
 #include <stdarg.h>
 
+/* Keep the only remaining C translation unit limited to the variadic log ABI. */
 struct _ExifLog {
 	unsigned int ref_count;
 	ExifLogFunc func;

@@ -10,8 +10,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use exif::ffi::types::*;
 
 unsafe extern "C" {
-    fn exif_data_option_get_name(option: ExifDataOption) -> *const c_char;
-    fn exif_data_option_get_description(option: ExifDataOption) -> *const c_char;
+    safe fn exif_data_option_get_name(option: ExifDataOption) -> *const c_char;
+    safe fn exif_data_option_get_description(option: ExifDataOption) -> *const c_char;
     fn exif_mem_new(
         alloc_func: ExifMemAllocFunc,
         realloc_func: ExifMemReallocFunc,
@@ -27,8 +27,8 @@ unsafe extern "C" {
     fn exif_log_unref(log: *mut ExifLog);
     fn exif_log_free(log: *mut ExifLog);
     fn exif_log_set_func(log: *mut ExifLog, func: ExifLogFunc, data: *mut c_void);
-    fn exif_log_code_get_title(code: ExifLogCode) -> *const c_char;
-    fn exif_log_code_get_message(code: ExifLogCode) -> *const c_char;
+    safe fn exif_log_code_get_title(code: ExifLogCode) -> *const c_char;
+    safe fn exif_log_code_get_message(code: ExifLogCode) -> *const c_char;
     fn calloc(nmemb: usize, size: usize) -> *mut c_void;
     fn realloc(ptr: *mut c_void, size: usize) -> *mut c_void;
     fn free(ptr: *mut c_void);
@@ -56,34 +56,42 @@ unsafe extern "C" fn counting_free(ptr_: *mut c_void) {
 #[test]
 fn exif_data_option_strings_match_original_c_locale() {
     assert_eq!(
-        c_string(unsafe { exif_data_option_get_name(EXIF_DATA_OPTION_IGNORE_UNKNOWN_TAGS) }),
+        c_string(exif_data_option_get_name(
+            EXIF_DATA_OPTION_IGNORE_UNKNOWN_TAGS
+        )),
         Some("Ignore unknown tags".to_owned())
     );
     assert_eq!(
-        c_string(unsafe { exif_data_option_get_description(EXIF_DATA_OPTION_IGNORE_UNKNOWN_TAGS) }),
+        c_string(exif_data_option_get_description(
+            EXIF_DATA_OPTION_IGNORE_UNKNOWN_TAGS
+        )),
         Some("Ignore unknown tags when loading EXIF data.".to_owned())
     );
     assert_eq!(
-        c_string(unsafe { exif_data_option_get_name(EXIF_DATA_OPTION_FOLLOW_SPECIFICATION) }),
+        c_string(exif_data_option_get_name(
+            EXIF_DATA_OPTION_FOLLOW_SPECIFICATION
+        )),
         Some("Follow specification".to_owned())
     );
     assert_eq!(
-        c_string(unsafe {
-            exif_data_option_get_description(EXIF_DATA_OPTION_FOLLOW_SPECIFICATION)
-        }),
+        c_string(exif_data_option_get_description(
+            EXIF_DATA_OPTION_FOLLOW_SPECIFICATION
+        )),
         Some(
             "Add, correct and remove entries to get EXIF data that follows the specification."
                 .to_owned(),
         )
     );
     assert_eq!(
-        c_string(unsafe { exif_data_option_get_name(EXIF_DATA_OPTION_DONT_CHANGE_MAKER_NOTE) }),
+        c_string(exif_data_option_get_name(
+            EXIF_DATA_OPTION_DONT_CHANGE_MAKER_NOTE
+        )),
         Some("Do not change maker note".to_owned())
     );
     assert_eq!(
-        c_string(unsafe {
-            exif_data_option_get_description(EXIF_DATA_OPTION_DONT_CHANGE_MAKER_NOTE)
-        }),
+        c_string(exif_data_option_get_description(
+            EXIF_DATA_OPTION_DONT_CHANGE_MAKER_NOTE,
+        )),
         Some(
             "When loading and resaving Exif data, save the maker note unmodified. Be aware that the maker note can get corrupted.".to_owned(),
         )
@@ -92,10 +100,10 @@ fn exif_data_option_strings_match_original_c_locale() {
 
 #[test]
 fn unknown_data_option_returns_null() {
-    assert!(unsafe { exif_data_option_get_name(0) }.is_null());
-    assert!(unsafe { exif_data_option_get_description(0) }.is_null());
-    assert!(unsafe { exif_data_option_get_name(12345) }.is_null());
-    assert!(unsafe { exif_data_option_get_description(12345) }.is_null());
+    assert!(exif_data_option_get_name(0).is_null());
+    assert!(exif_data_option_get_description(0).is_null());
+    assert!(exif_data_option_get_name(12345).is_null());
+    assert!(exif_data_option_get_description(12345).is_null());
 }
 
 #[test]
@@ -110,8 +118,8 @@ fn log_mem_nulls() {
     }
 
     assert!(unsafe { exif_log_new_mem(std::ptr::null_mut()) }.is_null());
-    assert!(unsafe { exif_log_code_get_title(EXIF_LOG_CODE_NONE) }.is_null());
-    assert!(unsafe { exif_log_code_get_message(EXIF_LOG_CODE_NONE) }.is_null());
+    assert!(exif_log_code_get_title(EXIF_LOG_CODE_NONE).is_null());
+    assert!(exif_log_code_get_message(EXIF_LOG_CODE_NONE).is_null());
     unsafe {
         exif_log_ref(std::ptr::null_mut());
         exif_log_unref(std::ptr::null_mut());
@@ -119,8 +127,8 @@ fn log_mem_nulls() {
         exif_log_set_func(std::ptr::null_mut(), None, std::ptr::null_mut());
     }
 
-    assert!(unsafe { exif_data_option_get_name(0) }.is_null());
-    assert!(unsafe { exif_data_option_get_description(0) }.is_null());
+    assert!(exif_data_option_get_name(0).is_null());
+    assert!(exif_data_option_get_description(0).is_null());
 }
 
 #[test]
@@ -182,23 +190,23 @@ fn exif_mem_preserves_allocator_and_refcount_semantics() {
 #[test]
 fn exif_log_codes_and_null_handling_match_original() {
     assert_eq!(
-        c_string(unsafe { exif_log_code_get_title(EXIF_LOG_CODE_DEBUG) }),
+        c_string(exif_log_code_get_title(EXIF_LOG_CODE_DEBUG)),
         Some("Debugging information".to_owned())
     );
     assert_eq!(
-        c_string(unsafe { exif_log_code_get_message(EXIF_LOG_CODE_DEBUG) }),
+        c_string(exif_log_code_get_message(EXIF_LOG_CODE_DEBUG)),
         Some("Debugging information is available.".to_owned())
     );
     assert_eq!(
-        c_string(unsafe { exif_log_code_get_title(EXIF_LOG_CODE_NO_MEMORY) }),
+        c_string(exif_log_code_get_title(EXIF_LOG_CODE_NO_MEMORY)),
         Some("Not enough memory".to_owned())
     );
     assert_eq!(
-        c_string(unsafe { exif_log_code_get_message(EXIF_LOG_CODE_CORRUPT_DATA) }),
+        c_string(exif_log_code_get_message(EXIF_LOG_CODE_CORRUPT_DATA)),
         Some("The data provided does not follow the specification.".to_owned())
     );
-    assert!(unsafe { exif_log_code_get_title(EXIF_LOG_CODE_NONE) }.is_null());
-    assert!(unsafe { exif_log_code_get_message(EXIF_LOG_CODE_NONE) }.is_null());
+    assert!(exif_log_code_get_title(EXIF_LOG_CODE_NONE).is_null());
+    assert!(exif_log_code_get_message(EXIF_LOG_CODE_NONE).is_null());
 
     assert!(unsafe { exif_log_new_mem(std::ptr::null_mut()) }.is_null());
 

@@ -1036,7 +1036,7 @@ unsafe extern "C" {
 }
 
 #[inline]
-unsafe fn pentax_note(note: *mut ExifMnoteData) -> *mut ExifMnoteDataPentax {
+fn pentax_note(note: *mut ExifMnoteData) -> *mut ExifMnoteDataPentax {
     note.cast()
 }
 
@@ -1226,7 +1226,7 @@ unsafe extern "C" fn exif_mnote_data_pentax_save(
     buffer: *mut *mut c_uchar,
     buffer_size: *mut c_uint,
 ) {
-    let note = unsafe { pentax_note(note) };
+    let note = pentax_note(note);
     if note.is_null() || buffer.is_null() || buffer_size.is_null() {
         return;
     }
@@ -1355,7 +1355,7 @@ unsafe extern "C" fn exif_mnote_data_pentax_load(
     buffer: *const c_uchar,
     buffer_size: c_uint,
 ) {
-    let note = unsafe { pentax_note(note) };
+    let note = pentax_note(note);
     let buffer_size = buffer_size as usize;
     if note.is_null() || buffer.is_null() || buffer_size == 0 {
         if !note.is_null() {
@@ -1498,7 +1498,7 @@ unsafe extern "C" fn exif_mnote_data_pentax_load(
 }
 
 unsafe extern "C" fn exif_mnote_data_pentax_count(note: *mut ExifMnoteData) -> c_uint {
-    let note = unsafe { pentax_note(note) };
+    let note = pentax_note(note);
     if note.is_null() {
         0
     } else {
@@ -1510,7 +1510,7 @@ unsafe extern "C" fn exif_mnote_data_pentax_get_id(
     note: *mut ExifMnoteData,
     index: c_uint,
 ) -> c_uint {
-    let note = unsafe { pentax_note(note) };
+    let note = pentax_note(note);
     if note.is_null() || unsafe { (*note).count <= index } {
         0
     } else {
@@ -1522,7 +1522,7 @@ unsafe extern "C" fn exif_mnote_data_pentax_get_name(
     note: *mut ExifMnoteData,
     index: c_uint,
 ) -> *const c_char {
-    let note = unsafe { pentax_note(note) };
+    let note = pentax_note(note);
     if note.is_null() || unsafe { (*note).count <= index } {
         return ptr::null();
     }
@@ -1534,7 +1534,7 @@ unsafe extern "C" fn exif_mnote_data_pentax_get_title(
     note: *mut ExifMnoteData,
     index: c_uint,
 ) -> *const c_char {
-    let note = unsafe { pentax_note(note) };
+    let note = pentax_note(note);
     if note.is_null() || unsafe { (*note).count <= index } {
         return ptr::null();
     }
@@ -1546,7 +1546,7 @@ unsafe extern "C" fn exif_mnote_data_pentax_get_description(
     note: *mut ExifMnoteData,
     index: c_uint,
 ) -> *const c_char {
-    let note = unsafe { pentax_note(note) };
+    let note = pentax_note(note);
     if note.is_null() || unsafe { (*note).count <= index } {
         ptr::null()
     } else {
@@ -1555,7 +1555,7 @@ unsafe extern "C" fn exif_mnote_data_pentax_get_description(
 }
 
 unsafe extern "C" fn exif_mnote_data_pentax_set_offset(note: *mut ExifMnoteData, offset: c_uint) {
-    let note = unsafe { pentax_note(note) };
+    let note = pentax_note(note);
     if !note.is_null() {
         unsafe { (*note).offset = offset };
     }
@@ -1565,7 +1565,7 @@ unsafe extern "C" fn exif_mnote_data_pentax_set_byte_order(
     note: *mut ExifMnoteData,
     order: ExifByteOrder,
 ) {
-    let note = unsafe { pentax_note(note) };
+    let note = pentax_note(note);
     if note.is_null() {
         return;
     }
@@ -1751,8 +1751,8 @@ pub unsafe extern "C" fn mnote_pentax_entry_get_value(
                     maxlen,
                     &format!(
                         "{year}:{:02}:{:02}",
-                        unsafe { *entry_ref.data.add(2) },
-                        unsafe { *entry_ref.data.add(3) }
+                        *entry_ref.data.add(2),
+                        *entry_ref.data.add(3)
                     ),
                 )
             }
@@ -1768,9 +1768,9 @@ pub unsafe extern "C" fn mnote_pentax_entry_get_value(
                     maxlen,
                     &format!(
                         "{:02}:{:02}:{:02}",
-                        unsafe { *entry_ref.data },
-                        unsafe { *entry_ref.data.add(1) },
-                        unsafe { *entry_ref.data.add(2) }
+                        *entry_ref.data,
+                        *entry_ref.data.add(1),
+                        *entry_ref.data.add(2)
                     ),
                 )
             }
@@ -1788,7 +1788,7 @@ pub unsafe extern "C" fn mnote_pentax_entry_get_value(
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn mnote_pentax_tag_get_description(tag: MnotePentaxTag) -> *const c_char {
+pub extern "C" fn mnote_pentax_tag_get_description(tag: MnotePentaxTag) -> *const c_char {
     panic_boundary::call_or(ptr::null(), || match tag {
         0x2022 => b"Distance of photographed object in millimeters.\0"
             .as_ptr()
@@ -1801,14 +1801,14 @@ pub unsafe extern "C" fn mnote_pentax_tag_get_description(tag: MnotePentaxTag) -
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn mnote_pentax_tag_get_name(tag: MnotePentaxTag) -> *const c_char {
+pub extern "C" fn mnote_pentax_tag_get_name(tag: MnotePentaxTag) -> *const c_char {
     panic_boundary::call_or(ptr::null(), || {
         pentax_tag_name_impl(tag).map_or(ptr::null(), |name| name.as_ptr().cast())
     })
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn mnote_pentax_tag_get_title(tag: MnotePentaxTag) -> *const c_char {
+pub extern "C" fn mnote_pentax_tag_get_title(tag: MnotePentaxTag) -> *const c_char {
     panic_boundary::call_or(ptr::null(), || {
         pentax_tag_title_impl(tag).map_or(ptr::null(), |title| title.as_ptr().cast())
     })
@@ -1820,7 +1820,7 @@ unsafe extern "C" fn exif_mnote_data_pentax_get_value(
     value: *mut c_char,
     maxlen: c_uint,
 ) -> *mut c_char {
-    let note = unsafe { pentax_note(note) };
+    let note = pentax_note(note);
     if note.is_null() || unsafe { (*note).count <= index } {
         return ptr::null_mut();
     }

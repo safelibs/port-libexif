@@ -52,12 +52,12 @@ pub(crate) fn exif_data_option_get_description_impl(option: ExifDataOption) -> *
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn exif_data_option_get_name(option: ExifDataOption) -> *const c_char {
+pub extern "C" fn exif_data_option_get_name(option: ExifDataOption) -> *const c_char {
     panic_boundary::call_or(ptr::null(), || exif_data_option_get_name_impl(option))
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn exif_data_option_get_description(option: ExifDataOption) -> *const c_char {
+pub extern "C" fn exif_data_option_get_description(option: ExifDataOption) -> *const c_char {
     panic_boundary::call_or(ptr::null(), || {
         exif_data_option_get_description_impl(option)
     })

@@ -104,7 +104,7 @@ unsafe extern "C" {
 }
 
 #[inline]
-unsafe fn apple_note(note: *mut ExifMnoteData) -> *mut ExifMnoteDataApple {
+fn apple_note(note: *mut ExifMnoteData) -> *mut ExifMnoteDataApple {
     note.cast()
 }
 
@@ -137,7 +137,7 @@ unsafe fn log_no_memory(note: *mut ExifMnoteDataApple, size: usize) {
 }
 
 unsafe extern "C" fn exif_mnote_data_apple_free(note: *mut ExifMnoteData) {
-    let note = unsafe { apple_note(note) };
+    let note = apple_note(note);
     if note.is_null() {
         return;
     }
@@ -165,7 +165,7 @@ unsafe extern "C" fn exif_mnote_data_apple_load(
     buffer: *const c_uchar,
     buffer_size: c_uint,
 ) {
-    let note = unsafe { apple_note(note) };
+    let note = apple_note(note);
     let buffer_size = buffer_size as usize;
 
     if note.is_null() || buffer.is_null() || buffer_size < 22 {
@@ -329,7 +329,7 @@ unsafe extern "C" fn exif_mnote_data_apple_load(
 }
 
 unsafe extern "C" fn exif_mnote_data_apple_set_offset(note: *mut ExifMnoteData, offset: c_uint) {
-    let note = unsafe { apple_note(note) };
+    let note = apple_note(note);
     if !note.is_null() {
         unsafe { (*note).offset = offset };
     }
@@ -339,7 +339,7 @@ unsafe extern "C" fn exif_mnote_data_apple_set_byte_order(
     note: *mut ExifMnoteData,
     order: ExifByteOrder,
 ) {
-    let note = unsafe { apple_note(note) };
+    let note = apple_note(note);
     if note.is_null() || unsafe { (*note).order } == order {
         return;
     }
@@ -369,7 +369,7 @@ unsafe extern "C" fn exif_mnote_data_apple_set_byte_order(
 }
 
 unsafe extern "C" fn exif_mnote_data_apple_count(note: *mut ExifMnoteData) -> c_uint {
-    let note = unsafe { apple_note(note) };
+    let note = apple_note(note);
     if note.is_null() {
         0
     } else {
@@ -381,7 +381,7 @@ unsafe extern "C" fn exif_mnote_data_apple_get_id(
     note: *mut ExifMnoteData,
     index: c_uint,
 ) -> c_uint {
-    let note = unsafe { apple_note(note) };
+    let note = apple_note(note);
     if note.is_null() || unsafe { (*note).count <= index } {
         return 0;
     }
@@ -393,7 +393,7 @@ unsafe extern "C" fn exif_mnote_data_apple_get_name(
     note: *mut ExifMnoteData,
     index: c_uint,
 ) -> *const c_char {
-    let note = unsafe { apple_note(note) };
+    let note = apple_note(note);
     if note.is_null() || unsafe { (*note).count <= index } {
         return ptr::null();
     }
@@ -405,7 +405,7 @@ unsafe extern "C" fn exif_mnote_data_apple_get_title(
     note: *mut ExifMnoteData,
     index: c_uint,
 ) -> *const c_char {
-    let note = unsafe { apple_note(note) };
+    let note = apple_note(note);
     if note.is_null() || unsafe { (*note).count <= index } {
         return ptr::null();
     }
@@ -417,7 +417,7 @@ unsafe extern "C" fn exif_mnote_data_apple_get_description(
     note: *mut ExifMnoteData,
     index: c_uint,
 ) -> *const c_char {
-    let note = unsafe { apple_note(note) };
+    let note = apple_note(note);
     if note.is_null() || unsafe { (*note).count <= index } {
         return ptr::null();
     }
@@ -547,7 +547,7 @@ unsafe extern "C" fn exif_mnote_data_apple_get_value(
     buffer: *mut c_char,
     maxlen: c_uint,
 ) -> *mut c_char {
-    let note = unsafe { apple_note(note) };
+    let note = apple_note(note);
     if note.is_null() || buffer.is_null() || unsafe { (*note).count <= index } {
         return ptr::null_mut();
     }

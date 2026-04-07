@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-phase_id=impl_01_abi_packaging
+phase_id=impl_08_safety_perf_docs
 script_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 safe_dir=$(cd "$script_dir/.." && pwd)
 repo_root=$(cd "$safe_dir/.." && pwd)
@@ -13,6 +13,7 @@ fixture_root="$script_dir/testdata"
 manifest="$script_dir/perf/fixture-manifest.txt"
 original_so="$repo_root/original/libexif/.libs/libexif.so.12.3.4"
 package_root=${PACKAGE_BUILD_ROOT:-"$safe_dir/.artifacts/$phase_id"}
+package_root=$(PACKAGE_BUILD_ROOT="$package_root" "$script_dir/run-package-build.sh")
 perf_root="$package_root/perf"
 driver="$perf_root/bench-driver"
 safe_overlay="$package_root/root"
@@ -144,7 +145,6 @@ sum_values() {
 }
 
 ensure_original_library
-PACKAGE_BUILD_ROOT="$package_root" "$script_dir/run-package-build.sh" >/dev/null
 [[ -f "$safe_lib_dir/libexif.so.12.3.4" ]] || fail "missing packaged safe library"
 compile_driver
 prepare_runtime_dirs

@@ -359,7 +359,7 @@ unsafe extern "C" fn remove_not_recorded_callback(entry: *mut ExifEntry, _data: 
     let content = unsafe { (*entry).parent };
     let ifd = unsafe { exif_content_get_ifd_impl(content) };
     let data_type = unsafe { exif_data_get_data_type_impl((*content).parent) };
-    let support = unsafe { exif_tag_get_support_level_in_ifd((*entry).tag, ifd, data_type) };
+    let support = exif_tag_get_support_level_in_ifd((*entry).tag, ifd, data_type);
     if support == EXIF_SUPPORT_LEVEL_NOT_RECORDED {
         unsafe { exif_content_remove_entry_impl(content, entry) };
     }
@@ -395,7 +395,7 @@ pub(crate) unsafe fn exif_content_fix_impl(content: *mut ExifContent) {
         if tag_entry.name.is_none() {
             break;
         }
-        let support = unsafe { exif_tag_get_support_level_in_ifd(tag_entry.tag, ifd, data_type) };
+        let support = exif_tag_get_support_level_in_ifd(tag_entry.tag, ifd, data_type);
         if support != EXIF_SUPPORT_LEVEL_MANDATORY {
             continue;
         }
@@ -440,7 +440,7 @@ pub(crate) unsafe fn exif_content_dump_impl(content: *mut ExifContent, indent: c
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn exif_content_new() -> *mut ExifContent {
+pub extern "C" fn exif_content_new() -> *mut ExifContent {
     panic_boundary::call_or(ptr::null_mut(), || unsafe { exif_content_new_impl() })
 }
 

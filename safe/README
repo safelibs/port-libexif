@@ -6,7 +6,9 @@ DESCRIPTION
 
 libexif is a library for parsing, editing, and saving EXIF data. It is
 intended to replace lots of redundant implementations in command-line
-utilities and programs with GUIs.
+utilities and programs with GUIs. This safety-hardened port preserves the
+published libexif C ABI and installed headers while implementing the library
+core in Rust.
 
 
 FEATURES
@@ -21,8 +23,10 @@ Fuji, Nikon, Olympus, Pentax and Sanyo cameras are also supported.
 REQUIREMENTS
 ------------
 
-libexif is written in plain C and does not require any additional library.
-GNU gettext will be used for language translation, if available.
+The shipped library keeps the original libexif C ABI, but the implementation
+is now predominantly Rust rather than plain C. A small C shim remains for the
+variadic logging ABI, and GNU gettext will be used for language translation,
+if available.
 
 
 LIMITATIONS
@@ -85,37 +89,15 @@ The following libraries use or have been inspired by libexif:
 BUILDING
 --------
 
-It really depends on your environment what to do in order to get libexif
-to build. Building from the source tar ball usually involves the commands:
+This safety-hardened port is built from the `safe/` overlay with Cargo. Common
+workflows are:
 
-  ./configure
-  make
-  sudo make install
+  cargo build --release
+  cargo test --release
+  PACKAGE_BUILD_ROOT="$PWD/.artifacts/impl_08_safety_perf_docs" bash tests/run-package-build.sh
 
-When building from source out of git, something like the following will be
-necessary:
-
-  autoreconf -i
-  ./configure
-  make
-
-Besides the standard arguments, configure takes several specific to libexif:
-
-  --disable-docs          To disable producing any documentation
-  --enable-internal-docs  Build internal code docs if Doxygen available
-  --enable-ship-binaries  To include Windows DLLs in 'make dist'
-
-Certain specialized applications can reduce the size of the libexif
-binary by setting one or both of the following macros in the CPPFLAGS
-environment variable at configure time.  Each one removes certain kinds of
-text strings and constants from the binary.  Applications which need
-to access specific, known EXIF tags and know in advance the meaning of
-their data have no need of those strings and can save considerable space
-by eliminating them.
-
- -DNO_VERBOSE_TAG_STRINGS Names and descriptions of EXIF tags, debug messages,
-                          mandatory EXIF fields (disabling auto-tag-fixup)
- -DNO_VERBOSE_TAG_DATA    Names of enumerated tag data contents
+The historical autotools flow still applies to the upstream C reference tree
+under `../original/`, but not to this Rust overlay.
 
 
 INTERNATIONALIZATION

@@ -465,7 +465,7 @@ pub(crate) unsafe fn exif_data_dump_impl(data: *mut ExifData) {
     for ifd in 0..EXIF_IFD_COUNT as usize {
         let content = unsafe { (*data).ifd[ifd] };
         if !content.is_null() && unsafe { (*content).count } > 0 {
-            let name_ptr = unsafe { crate::primitives::ifd::exif_ifd_get_name(ifd as ExifIfd) };
+            let name_ptr = crate::primitives::ifd::exif_ifd_get_name(ifd as ExifIfd);
             let name = if name_ptr.is_null() {
                 ""
             } else {
@@ -491,7 +491,7 @@ pub(crate) unsafe fn exif_data_dump_impl(data: *mut ExifData) {
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn exif_data_new() -> *mut ExifData {
+pub extern "C" fn exif_data_new() -> *mut ExifData {
     panic_boundary::call_or(ptr::null_mut(), || unsafe { exif_data_new_impl() })
 }
 

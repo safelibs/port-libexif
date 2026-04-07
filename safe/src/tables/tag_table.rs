@@ -142,19 +142,19 @@ fn support_level_any_type(tag: ExifTag, ifd: ExifIfd) -> ExifSupportLevel {
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn exif_tag_table_count() -> u32 {
+pub extern "C" fn exif_tag_table_count() -> u32 {
     panic_boundary::call_or(0, || TAG_TABLE.len() as u32)
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn exif_tag_table_get_tag(index: u32) -> ExifTag {
+pub extern "C" fn exif_tag_table_get_tag(index: u32) -> ExifTag {
     panic_boundary::call_or(0, || {
         TAG_TABLE.get(index as usize).map_or(0, |entry| entry.tag)
     })
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn exif_tag_table_get_name(index: u32) -> *const c_char {
+pub extern "C" fn exif_tag_table_get_name(index: u32) -> *const c_char {
     panic_boundary::call_or(ptr::null(), || {
         TAG_TABLE
             .get(index as usize)
@@ -163,35 +163,32 @@ pub unsafe extern "C" fn exif_tag_table_get_name(index: u32) -> *const c_char {
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn exif_tag_get_name_in_ifd(tag: ExifTag, ifd: ExifIfd) -> *const c_char {
+pub extern "C" fn exif_tag_get_name_in_ifd(tag: ExifTag, ifd: ExifIfd) -> *const c_char {
     panic_boundary::call_or(ptr::null(), || name_ptr_in_ifd(tag, ifd))
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn exif_tag_get_title_in_ifd(tag: ExifTag, ifd: ExifIfd) -> *const c_char {
+pub extern "C" fn exif_tag_get_title_in_ifd(tag: ExifTag, ifd: ExifIfd) -> *const c_char {
     panic_boundary::call_or(ptr::null(), || title_ptr_in_ifd(tag, ifd))
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn exif_tag_get_description_in_ifd(
-    tag: ExifTag,
-    ifd: ExifIfd,
-) -> *const c_char {
+pub extern "C" fn exif_tag_get_description_in_ifd(tag: ExifTag, ifd: ExifIfd) -> *const c_char {
     panic_boundary::call_or(ptr::null(), || description_ptr_in_ifd(tag, ifd))
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn exif_tag_get_name(tag: ExifTag) -> *const c_char {
+pub extern "C" fn exif_tag_get_name(tag: ExifTag) -> *const c_char {
     panic_boundary::call_or(ptr::null(), || get_stuff(tag, name_ptr_in_ifd))
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn exif_tag_get_title(tag: ExifTag) -> *const c_char {
+pub extern "C" fn exif_tag_get_title(tag: ExifTag) -> *const c_char {
     panic_boundary::call_or(ptr::null(), || get_stuff(tag, title_ptr_in_ifd))
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn exif_tag_get_description(tag: ExifTag) -> *const c_char {
+pub extern "C" fn exif_tag_get_description(tag: ExifTag) -> *const c_char {
     panic_boundary::call_or(ptr::null(), || get_stuff(tag, description_ptr_in_ifd))
 }
 
@@ -218,7 +215,7 @@ pub unsafe extern "C" fn exif_tag_from_name(name: *const c_char) -> ExifTag {
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn exif_tag_get_support_level_in_ifd(
+pub extern "C" fn exif_tag_get_support_level_in_ifd(
     tag: ExifTag,
     ifd: ExifIfd,
     data_type: ExifDataType,

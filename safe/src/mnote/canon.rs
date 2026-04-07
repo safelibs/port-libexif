@@ -71,7 +71,7 @@ unsafe extern "C" {
 }
 
 #[inline]
-unsafe fn canon_note(note: *mut ExifMnoteData) -> *mut ExifMnoteDataCanon {
+fn canon_note(note: *mut ExifMnoteData) -> *mut ExifMnoteDataCanon {
     note.cast()
 }
 
@@ -1234,7 +1234,7 @@ unsafe extern "C" fn exif_mnote_data_canon_get_value(
     value: *mut c_char,
     maxlen: c_uint,
 ) -> *mut c_char {
-    let note = unsafe { canon_note(note) };
+    let note = canon_note(note);
     if note.is_null() {
         return ptr::null_mut();
     }
@@ -1258,7 +1258,7 @@ unsafe extern "C" fn exif_mnote_data_canon_set_byte_order(
     note: *mut ExifMnoteData,
     order: ExifByteOrder,
 ) {
-    let note = unsafe { canon_note(note) };
+    let note = canon_note(note);
     if note.is_null() {
         return;
     }
@@ -1287,7 +1287,7 @@ unsafe extern "C" fn exif_mnote_data_canon_set_byte_order(
 }
 
 unsafe extern "C" fn exif_mnote_data_canon_set_offset(note: *mut ExifMnoteData, offset: c_uint) {
-    let note = unsafe { canon_note(note) };
+    let note = canon_note(note);
     if !note.is_null() {
         unsafe { (*note).offset = offset };
     }
@@ -1298,7 +1298,7 @@ unsafe extern "C" fn exif_mnote_data_canon_save(
     buffer: *mut *mut c_uchar,
     buffer_size: *mut c_uint,
 ) {
-    let note = unsafe { canon_note(note) };
+    let note = canon_note(note);
     if note.is_null() || buffer.is_null() || buffer_size.is_null() {
         return;
     }
@@ -1388,7 +1388,7 @@ unsafe extern "C" fn exif_mnote_data_canon_load(
     buffer: *const c_uchar,
     buffer_size: c_uint,
 ) {
-    let note = unsafe { canon_note(note) };
+    let note = canon_note(note);
     let buffer_size = buffer_size as usize;
     if note.is_null() || buffer.is_null() || buffer_size == 0 {
         if !note.is_null() {
@@ -1532,7 +1532,7 @@ unsafe extern "C" fn exif_mnote_data_canon_load(
 }
 
 unsafe extern "C" fn exif_mnote_data_canon_count(note: *mut ExifMnoteData) -> c_uint {
-    let note = unsafe { canon_note(note) };
+    let note = canon_note(note);
     if note.is_null() {
         return 0;
     }
@@ -1547,7 +1547,7 @@ unsafe extern "C" fn exif_mnote_data_canon_get_id(
     note: *mut ExifMnoteData,
     index: c_uint,
 ) -> c_uint {
-    let note = unsafe { canon_note(note) };
+    let note = canon_note(note);
     if note.is_null() {
         return 0;
     }
@@ -1564,7 +1564,7 @@ unsafe extern "C" fn exif_mnote_data_canon_get_name(
     note: *mut ExifMnoteData,
     index: c_uint,
 ) -> *const c_char {
-    let note = unsafe { canon_note(note) };
+    let note = canon_note(note);
     if note.is_null() {
         return ptr::null();
     }
@@ -1590,7 +1590,7 @@ unsafe extern "C" fn exif_mnote_data_canon_get_title(
     note: *mut ExifMnoteData,
     index: c_uint,
 ) -> *const c_char {
-    let note = unsafe { canon_note(note) };
+    let note = canon_note(note);
     if note.is_null() {
         return ptr::null();
     }
@@ -1616,7 +1616,7 @@ unsafe extern "C" fn exif_mnote_data_canon_get_description(
     note: *mut ExifMnoteData,
     index: c_uint,
 ) -> *const c_char {
-    let note = unsafe { canon_note(note) };
+    let note = canon_note(note);
     if note.is_null() {
         return ptr::null();
     }
@@ -1937,16 +1937,16 @@ pub unsafe extern "C" fn mnote_canon_entry_get_value(
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn mnote_canon_tag_get_description(tag: MnoteCanonTag) -> *const c_char {
+pub extern "C" fn mnote_canon_tag_get_description(tag: MnoteCanonTag) -> *const c_char {
     panic_boundary::call_or(ptr::null(), || canon_tag_description_impl(tag))
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn mnote_canon_tag_get_name(tag: MnoteCanonTag) -> *const c_char {
+pub extern "C" fn mnote_canon_tag_get_name(tag: MnoteCanonTag) -> *const c_char {
     panic_boundary::call_or(ptr::null(), || canon_tag_name_impl(tag))
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn mnote_canon_tag_get_title(tag: MnoteCanonTag) -> *const c_char {
+pub extern "C" fn mnote_canon_tag_get_title(tag: MnoteCanonTag) -> *const c_char {
     panic_boundary::call_or(ptr::null(), || canon_tag_title_impl(tag))
 }

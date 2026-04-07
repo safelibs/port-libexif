@@ -1,3 +1,18 @@
+libexif-safe hardening snapshot (2026-04-07):
+
+  * Updated the shipped documentation to describe the library as a Rust
+    implementation that preserves the published libexif C ABI and headers.
+  * Narrowed the documented non-Rust surface to the variadic logging shim plus
+    libc/gettext calls; vendor MakerNote helper C sources are no longer part
+    of the safe overlay build or package-root metadata.
+  * Reduced unnecessary `unsafe` on ABI-stable enum/tag getter exports and
+    cast-only helper functions without changing the ABI.
+  * Performance comparison runs now target the impl_08 phase-local package
+    root and fail fast when reuse is required and the packaged overlay is
+    missing or stale.
+  * Preserved the existing performance thresholds in
+    tests/perf/thresholds.env; this phase did not relax them.
+
 libexif-0.6.24 (2021-11-25):
 
    * Translation updates: sr, vi, pl, uk, french

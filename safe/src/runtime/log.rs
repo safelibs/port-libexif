@@ -47,7 +47,7 @@ const LOG_CODES: [LogCodeEntry; 3] = [
 ];
 
 #[inline]
-unsafe fn log_private(log: *mut ExifLog) -> *mut ExifLogPrivate {
+fn log_private(log: *mut ExifLog) -> *mut ExifLogPrivate {
     log.cast()
 }
 
@@ -142,7 +142,7 @@ pub unsafe extern "C" fn exif_log_new_mem(mem: *mut ExifMem) -> *mut ExifLog {
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn exif_log_new() -> *mut ExifLog {
+pub extern "C" fn exif_log_new() -> *mut ExifLog {
     panic_boundary::call_or(ptr::null_mut(), || unsafe { exif_log_new_impl() })
 }
 
@@ -171,11 +171,11 @@ pub unsafe extern "C" fn exif_log_set_func(
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn exif_log_code_get_title(code: ExifLogCode) -> *const c_char {
+pub extern "C" fn exif_log_code_get_title(code: ExifLogCode) -> *const c_char {
     panic_boundary::call_or(ptr::null(), || exif_log_code_get_title_impl(code))
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn exif_log_code_get_message(code: ExifLogCode) -> *const c_char {
+pub extern "C" fn exif_log_code_get_message(code: ExifLogCode) -> *const c_char {
     panic_boundary::call_or(ptr::null(), || exif_log_code_get_message_impl(code))
 }

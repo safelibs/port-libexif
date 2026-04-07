@@ -2272,7 +2272,7 @@ pub(crate) unsafe fn exif_entry_dump_impl(entry: *mut ExifEntry, indent: c_uint)
             .into_owned()
     };
     let ifd = unsafe { exif_content_get_ifd_impl((*entry).parent) };
-    let tag_name_ptr = unsafe { exif_tag_get_name_in_ifd((*entry).tag, ifd) };
+    let tag_name_ptr = exif_tag_get_name_in_ifd((*entry).tag, ifd);
     let tag_name = if tag_name_ptr.is_null() {
         ""
     } else {
@@ -2308,7 +2308,7 @@ pub(crate) unsafe fn exif_entry_dump_impl(entry: *mut ExifEntry, indent: c_uint)
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn exif_entry_new() -> *mut ExifEntry {
+pub extern "C" fn exif_entry_new() -> *mut ExifEntry {
     panic_boundary::call_or(ptr::null_mut(), || unsafe { exif_entry_new_impl() })
 }
 

@@ -350,7 +350,7 @@ fn parse_ifd(
                 }
             }
             _ => {
-                let recorded = unsafe { exif_tag_get_name_in_ifd(tag, ifd) };
+                let recorded = exif_tag_get_name_in_ifd(tag, ifd);
                 if recorded.is_null() {
                     let prefix = slice_range(
                         tiff,

@@ -40,6 +40,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         env::var("LIBEXIF_LOCALEDIR").unwrap_or_else(|_| DEFAULT_LOCALEDIR.to_owned())
     );
 
+    // Keep the non-Rust build surface limited to the variadic logging bridge.
     cc::Build::new()
         .file("cshim/exif-log-shim.c")
         .include("include")

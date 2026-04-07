@@ -72,7 +72,7 @@ struct Loader {
 }
 
 #[inline]
-unsafe fn loader_private(loader: *mut ExifLoader) -> *mut Loader {
+fn loader_private(loader: *mut ExifLoader) -> *mut Loader {
     loader.cast::<Loader>()
 }
 
@@ -91,7 +91,7 @@ unsafe fn loader_copy(loader: *mut ExifLoader, buffer: *mut c_uchar, len: c_uint
         return 0;
     }
 
-    let raw = unsafe { loader_private(loader) };
+    let raw = loader_private(loader);
     let loader = unsafe { &mut *raw };
     if loader.bytes_read >= loader.size {
         return 0;
@@ -493,7 +493,7 @@ pub(crate) unsafe fn exif_loader_log_impl(loader: *mut ExifLoader, log: *mut Exi
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn exif_loader_new() -> *mut ExifLoader {
+pub extern "C" fn exif_loader_new() -> *mut ExifLoader {
     panic_boundary::call_or(ptr::null_mut(), || unsafe { exif_loader_new_impl() })
 }
 

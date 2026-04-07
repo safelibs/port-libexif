@@ -20,7 +20,7 @@ pub(crate) struct ExifMemPrivate {
 }
 
 #[inline]
-unsafe fn mem_private(mem: *mut ExifMem) -> *mut ExifMemPrivate {
+fn mem_private(mem: *mut ExifMem) -> *mut ExifMemPrivate {
     mem.cast()
 }
 
@@ -151,7 +151,7 @@ pub unsafe extern "C" fn exif_mem_new(
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn exif_mem_new_default() -> *mut ExifMem {
+pub extern "C" fn exif_mem_new_default() -> *mut ExifMem {
     panic_boundary::call_or(ptr::null_mut(), || unsafe { exif_mem_new_default_impl() })
 }
 

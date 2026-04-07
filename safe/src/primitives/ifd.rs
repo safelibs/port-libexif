@@ -44,6 +44,6 @@ pub(crate) fn exif_ifd_get_name_impl(ifd: ExifIfd) -> *const c_char {
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn exif_ifd_get_name(ifd: ExifIfd) -> *const c_char {
+pub extern "C" fn exif_ifd_get_name(ifd: ExifIfd) -> *const c_char {
     panic_boundary::call_or(ptr::null(), || exif_ifd_get_name_impl(ifd))
 }

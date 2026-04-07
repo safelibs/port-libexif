@@ -17,6 +17,6 @@ pub(crate) fn exif_byte_order_get_name_impl(order: ExifByteOrder) -> *const c_ch
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn exif_byte_order_get_name(order: ExifByteOrder) -> *const c_char {
+pub extern "C" fn exif_byte_order_get_name(order: ExifByteOrder) -> *const c_char {
     panic_boundary::call_or(ptr::null(), || exif_byte_order_get_name_impl(order))
 }

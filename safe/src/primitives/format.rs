@@ -94,11 +94,11 @@ pub(crate) fn exif_format_get_size_impl(format: ExifFormat) -> c_uchar {
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn exif_format_get_name(format: ExifFormat) -> *const c_char {
+pub extern "C" fn exif_format_get_name(format: ExifFormat) -> *const c_char {
     panic_boundary::call_or(ptr::null(), || exif_format_get_name_impl(format))
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn exif_format_get_size(format: ExifFormat) -> c_uchar {
+pub extern "C" fn exif_format_get_size(format: ExifFormat) -> c_uchar {
     panic_boundary::call_or(0, || exif_format_get_size_impl(format))
 }
