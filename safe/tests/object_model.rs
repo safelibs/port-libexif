@@ -1,6 +1,7 @@
 use std::ffi::CStr;
 use std::os::raw::{c_char, c_void};
 use std::ptr;
+use std::slice;
 
 use exif::ffi::types::*;
 
@@ -9,6 +10,8 @@ unsafe extern "C" {
     fn exif_data_unref(data: *mut ExifData);
     fn exif_data_fix(data: *mut ExifData);
     fn exif_data_get_data_type(data: *mut ExifData) -> ExifDataType;
+    fn exif_data_set_byte_order(data: *mut ExifData, order: ExifByteOrder);
+    fn exif_data_save_data(data: *mut ExifData, buffer: *mut *mut u8, size: *mut u32);
     fn exif_content_add_entry(content: *mut ExifContent, entry: *mut ExifEntry);
     fn exif_content_remove_entry(content: *mut ExifContent, entry: *mut ExifEntry);
     fn exif_content_get_entry(content: *mut ExifContent, tag: ExifTag) -> *mut ExifEntry;
@@ -26,6 +29,13 @@ unsafe extern "C" {
     fn exif_mem_unref(mem: *mut ExifMem);
     fn exif_mem_alloc(mem: *mut ExifMem, size: ExifLong) -> *mut c_void;
     fn exif_mem_free(mem: *mut ExifMem, ptr_: *mut c_void);
+    fn exif_loader_new() -> *mut ExifLoader;
+    fn exif_loader_unref(loader: *mut ExifLoader);
+    fn exif_loader_write(loader: *mut ExifLoader, buffer: *mut u8, size: u32) -> u8;
+    fn exif_loader_get_buf(loader: *mut ExifLoader, buffer: *mut *const u8, size: *mut u32);
+    fn exif_loader_get_data(loader: *mut ExifLoader) -> *mut ExifData;
+    fn exif_loader_reset(loader: *mut ExifLoader);
+    fn free(ptr_: *mut c_void);
 }
 
 const EXIF_TAG_IMAGE_WIDTH: ExifTag = 0x0100;
@@ -132,8 +142,79 @@ fn data_fix_populates_mandatory_entries_and_null_defaults_match_phase_requiremen
     }
 }
 
+#[test]
+fn loader_roundtrip_retains_saved_bytes_and_reset_clears_them() {
+    unsafe {
+        let data = exif_data_new();
+        assert!(!data.is_null());
+        exif_data_set_byte_order(data, EXIF_BYTE_ORDER_INTEL);
+
+        let ifd0 = (*data).ifd[EXIF_IFD_0 as usize];
+        assert!(!ifd0.is_null());
+
+        let entry = exif_entry_new();
+        assert!(!entry.is_null());
+        exif_content_add_entry(ifd0, entry);
+        exif_entry_initialize(entry, EXIF_TAG_IMAGE_DESCRIPTION);
+        exif_entry_unref(entry);
+
+        let mut raw_data = ptr::null_mut();
+        let mut raw_size = 0;
+        exif_data_save_data(data, &mut raw_data, &mut raw_size);
+        assert!(!raw_data.is_null());
+        assert!(raw_size > 0);
+
+        let wrapped = wrap_loader_data(slice::from_raw_parts(raw_data, raw_size as usize));
+        let loader = exif_loader_new();
+        assert!(!loader.is_null());
+        assert_eq!(exif_loader_write(loader, wrapped.as_ptr().cast_mut(), 1), 1);
+        assert_eq!(
+            exif_loader_write(
+                loader,
+                wrapped.as_ptr().cast_mut().add(1),
+                (wrapped.len() - 1) as u32,
+            ),
+            0
+        );
+
+        let mut loader_buf = ptr::null();
+        let mut loader_size = 0;
+        exif_loader_get_buf(loader, &mut loader_buf, &mut loader_size);
+        assert_eq!(loader_size, raw_size);
+        assert!(!loader_buf.is_null());
+        assert_eq!(
+            slice::from_raw_parts(loader_buf, loader_size as usize),
+            slice::from_raw_parts(raw_data, raw_size as usize)
+        );
+
+        let from_loader = exif_loader_get_data(loader);
+        assert!(!from_loader.is_null());
+        let from_loader_ifd0 = (*from_loader).ifd[EXIF_IFD_0 as usize];
+        assert!(!from_loader_ifd0.is_null());
+        assert!(!exif_content_get_entry(from_loader_ifd0, EXIF_TAG_IMAGE_DESCRIPTION).is_null());
+        exif_data_unref(from_loader);
+
+        exif_loader_reset(loader);
+        exif_loader_get_buf(loader, &mut loader_buf, &mut loader_size);
+        assert!(loader_buf.is_null());
+        assert_eq!(loader_size, 0);
+        assert!(exif_loader_get_data(loader).is_null());
+
+        exif_loader_unref(loader);
+        free(raw_data.cast());
+        exif_data_unref(data);
+    }
+}
+
 fn c_str(ptr_: *const c_char) -> String {
     unsafe { CStr::from_ptr(ptr_) }
         .to_string_lossy()
         .into_owned()
+}
+
+fn wrap_loader_data(raw_data: &[u8]) -> Vec<u8> {
+    let mut wrapped = vec![0u8; raw_data.len() + 2];
+    wrapped[..2].copy_from_slice(&(raw_data.len() as u16).to_be_bytes());
+    wrapped[2..].copy_from_slice(raw_data);
+    wrapped
 }
