@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-phase_id=impl_06_downstream_cli_library
+phase_id=impl_07_downstream_gui_services
 script_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 safe_dir=$(cd "$script_dir/.." && pwd)
 repo_root=$(cd "$safe_dir/.." && pwd)

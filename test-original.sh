@@ -2,7 +2,7 @@
 set -euo pipefail
 
 ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
-PHASE_ID="impl_06_downstream_cli_library"
+PHASE_ID="impl_07_downstream_gui_services"
 IMAGE_LABEL_KEY="io.safelibs.libexif.image-inputs-sha256"
 IMAGE_TAG="${LIBEXIF_ORIGINAL_TEST_IMAGE:-libexif-original-test:${PHASE_ID}}"
 DOWNSTREAM_PACKAGE_ROOT="${LIBEXIF_DOWNSTREAM_PACKAGE_ROOT:-$ROOT/safe/.artifacts/${PHASE_ID}}"
@@ -171,6 +171,22 @@ ensure_workspace_inputs() {
   }
 }
 
+record_image_metadata() {
+  local metadata_dir="$DOWNSTREAM_PACKAGE_ROOT/metadata"
+  local manifest_path="$metadata_dir/original-test-image-inputs.manifest"
+  local digest_path="$metadata_dir/original-test-image-inputs.sha256"
+  local label_path="$metadata_dir/original-test-image-label.txt"
+  local tag_path="$metadata_dir/original-test-image-tag.txt"
+  local id_path="$metadata_dir/original-test-image-id.txt"
+
+  mkdir -p "$metadata_dir"
+  print_image_inputs_manifest >"$manifest_path"
+  printf '%s\n' "$IMAGE_INPUTS_SHA256" >"$digest_path"
+  printf '%s\n' "$IMAGE_LABEL_KEY" >"$label_path"
+  printf '%s\n' "$IMAGE_TAG" >"$tag_path"
+  docker image inspect "$IMAGE_TAG" --format '{{.Id}}' >"$id_path"
+}
+
 while (($#)); do
   case "$1" in
     --mode)
@@ -222,6 +238,7 @@ command -v docker >/dev/null 2>&1 || {
 
 ensure_image
 PACKAGE_BUILD_ROOT="$DOWNSTREAM_PACKAGE_ROOT" bash "$ROOT/safe/tests/run-package-build.sh" >/dev/null
+record_image_metadata
 mkdir -p "$DOWNSTREAM_PACKAGE_ROOT/downstream"
 
 docker run --rm -i \
