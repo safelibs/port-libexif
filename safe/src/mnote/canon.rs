@@ -8,9 +8,11 @@ use crate::ffi::types::{
     ExifMnoteData, ExifMnoteDataMethods, MnoteCanonEntry, MnoteCanonTag,
     EXIF_DATA_OPTION_IGNORE_UNKNOWN_TAGS, EXIF_FORMAT_ASCII, EXIF_FORMAT_LONG, EXIF_FORMAT_SHORT,
 };
+use crate::i18n::{empty_message, message};
 use crate::mnote::base::{
     check_overflow, generic_mnote_value, invalid_components_message, invalid_format_message,
-    write_slice_to_buffer, write_str_to_buffer,
+    tag_description_from_table, tag_name_from_table, tag_title_from_table, write_slice_to_buffer,
+    write_str_to_buffer, TagInfo,
 };
 use crate::primitives::format::exif_format_get_size_impl;
 use crate::primitives::utils::{
@@ -658,46 +660,469 @@ fn apex_value_to_iso_speed(value: f64) -> f64 {
     3.125 * 2f64.powf(value)
 }
 
-fn canon_tag_name_impl(tag: MnoteCanonTag) -> Option<&'static [u8]> {
-    match tag {
-        0x0001 => Some(b"Settings1\0"),
-        0x0002 => Some(b"FocalLength\0"),
-        0x0004 => Some(b"Settings2\0"),
-        0x0005 => Some(b"Panorama\0"),
-        0x0006 => Some(b"ImageType\0"),
-        0x0007 => Some(b"FirmwareVersion\0"),
-        0x0008 => Some(b"ImageNumber\0"),
-        0x0009 => Some(b"OwnerName\0"),
-        0x000c => Some(b"SerialNumber\0"),
-        MNOTE_CANON_TAG_CAMERA_INFO => Some(b"CameraInfo\0"),
-        0x000f => Some(b"CustomFunctions\0"),
-        MNOTE_CANON_TAG_MODEL_ID => Some(b"ModelID\0"),
-        MNOTE_CANON_TAG_AF_INFO => Some(b"AFInfo\0"),
-        MNOTE_CANON_TAG_THUMBNAIL_VALID_AREA => Some(b"ThumbnailValidArea\0"),
-        0x00a0 => Some(b"ColorInformation\0"),
-        _ => None,
-    }
+const CANON_TAGS: &[TagInfo] = &[
+    TagInfo {
+        tag: 0x0001,
+        name: Some(message(b"Settings1\0")),
+        title: Some(message(b"Settings (First Part)\0")),
+        description: Some(empty_message()),
+    },
+    TagInfo {
+        tag: 0x0002,
+        name: Some(message(b"FocalLength\0")),
+        title: Some(message(b"Focal Length\0")),
+        description: Some(empty_message()),
+    },
+    TagInfo {
+        tag: 0x0004,
+        name: Some(message(b"Settings2\0")),
+        title: Some(message(b"Settings (Second Part)\0")),
+        description: Some(empty_message()),
+    },
+    TagInfo {
+        tag: 0x0005,
+        name: Some(message(b"Panorama\0")),
+        title: Some(message(b"Panorama\0")),
+        description: Some(empty_message()),
+    },
+    TagInfo {
+        tag: 0x0006,
+        name: Some(message(b"ImageType\0")),
+        title: Some(message(b"Image Type\0")),
+        description: Some(empty_message()),
+    },
+    TagInfo {
+        tag: 0x0007,
+        name: Some(message(b"FirmwareVersion\0")),
+        title: Some(message(b"Firmware Version\0")),
+        description: Some(empty_message()),
+    },
+    TagInfo {
+        tag: 0x0008,
+        name: Some(message(b"ImageNumber\0")),
+        title: Some(message(b"Image Number\0")),
+        description: Some(empty_message()),
+    },
+    TagInfo {
+        tag: 0x0009,
+        name: Some(message(b"OwnerName\0")),
+        title: Some(message(b"Owner Name\0")),
+        description: Some(empty_message()),
+    },
+    TagInfo {
+        tag: 0x00a0,
+        name: Some(message(b"ColorInformation\0")),
+        title: Some(message(b"Color Information\0")),
+        description: Some(empty_message()),
+    },
+    TagInfo {
+        tag: 0x000c,
+        name: Some(message(b"SerialNumber\0")),
+        title: Some(message(b"Serial Number\0")),
+        description: Some(empty_message()),
+    },
+    TagInfo {
+        tag: 0x000d,
+        name: Some(message(b"CameraInfo\0")),
+        title: Some(message(b"Camera Info\0")),
+        description: Some(empty_message()),
+    },
+    TagInfo {
+        tag: 0x000e,
+        name: Some(message(b"FileLength\0")),
+        title: Some(message(b"File Length\0")),
+        description: Some(empty_message()),
+    },
+    TagInfo {
+        tag: 0x000f,
+        name: Some(message(b"CustomFunctions\0")),
+        title: Some(message(b"Custom Functions\0")),
+        description: Some(empty_message()),
+    },
+    TagInfo {
+        tag: 0x0010,
+        name: Some(message(b"ModelID\0")),
+        title: Some(message(b"Model ID\0")),
+        description: Some(empty_message()),
+    },
+    TagInfo {
+        tag: 0x0011,
+        name: Some(message(b"MovieInfo\0")),
+        title: Some(message(b"Movie Info\0")),
+        description: Some(empty_message()),
+    },
+    TagInfo {
+        tag: 0x0012,
+        name: Some(message(b"AFInfo\0")),
+        title: Some(message(b"AF Info\0")),
+        description: Some(empty_message()),
+    },
+    TagInfo {
+        tag: 0x0013,
+        name: Some(message(b"ThumbnailValidArea\0")),
+        title: Some(message(b"Thumbnail Valid Area\0")),
+        description: Some(empty_message()),
+    },
+    TagInfo {
+        tag: 0x0015,
+        name: Some(message(b"SerialNumberFormat\0")),
+        title: Some(message(b"Serial Number Format\0")),
+        description: Some(empty_message()),
+    },
+    TagInfo {
+        tag: 0x001a,
+        name: Some(message(b"SuperMacro\0")),
+        title: Some(message(b"Super Macro\0")),
+        description: Some(empty_message()),
+    },
+    TagInfo {
+        tag: 0x001c,
+        name: Some(message(b"DateStampMode\0")),
+        title: Some(message(b"Date Stamp Mode\0")),
+        description: Some(empty_message()),
+    },
+    TagInfo {
+        tag: 0x001d,
+        name: Some(message(b"MyColors\0")),
+        title: Some(message(b"My Colors\0")),
+        description: Some(empty_message()),
+    },
+    TagInfo {
+        tag: 0x001e,
+        name: Some(message(b"FirmwareRevision\0")),
+        title: Some(message(b"Firmware Revision\0")),
+        description: Some(empty_message()),
+    },
+    TagInfo {
+        tag: 0x0023,
+        name: Some(message(b"Categories\0")),
+        title: Some(message(b"Categories\0")),
+        description: Some(empty_message()),
+    },
+    TagInfo {
+        tag: 0x0024,
+        name: Some(message(b"FaceDetect1\0")),
+        title: Some(message(b"Face Detect 1\0")),
+        description: Some(empty_message()),
+    },
+    TagInfo {
+        tag: 0x0025,
+        name: Some(message(b"FaceDetect2\0")),
+        title: Some(message(b"Face Detect 2\0")),
+        description: Some(empty_message()),
+    },
+    TagInfo {
+        tag: 0x0026,
+        name: Some(message(b"AFInfo2\0")),
+        title: Some(message(b"AF Info 2\0")),
+        description: Some(empty_message()),
+    },
+    TagInfo {
+        tag: 0x0027,
+        name: Some(message(b"ContrastInfo\0")),
+        title: Some(message(b"Contrast Info\0")),
+        description: Some(empty_message()),
+    },
+    TagInfo {
+        tag: 0x0028,
+        name: Some(message(b"ImageUniqueID\0")),
+        title: Some(message(b"Image Unique ID\0")),
+        description: Some(empty_message()),
+    },
+    TagInfo {
+        tag: 0x0029,
+        name: Some(message(b"WBInfo\0")),
+        title: Some(message(b"WB Info\0")),
+        description: Some(empty_message()),
+    },
+    TagInfo {
+        tag: 0x002f,
+        name: Some(message(b"FaceDetect3\0")),
+        title: Some(message(b"Face Detect 3\0")),
+        description: Some(empty_message()),
+    },
+    TagInfo {
+        tag: 0x0035,
+        name: Some(message(b"TimeInfo\0")),
+        title: Some(message(b"Time Info\0")),
+        description: Some(empty_message()),
+    },
+    TagInfo {
+        tag: 0x0038,
+        name: Some(message(b"Battery Type\0")),
+        title: Some(message(b"Battery Type\0")),
+        description: Some(empty_message()),
+    },
+    TagInfo {
+        tag: 0x003c,
+        name: Some(message(b"AFInfo3\0")),
+        title: Some(message(b"AF Info 3\0")),
+        description: Some(empty_message()),
+    },
+    TagInfo {
+        tag: 0x0081,
+        name: Some(message(b"RawDataOffset\0")),
+        title: Some(message(b"Raw Data Offset\0")),
+        description: Some(empty_message()),
+    },
+    TagInfo {
+        tag: 0x0083,
+        name: Some(message(b"OriginalDecisionDataOffset\0")),
+        title: Some(message(b"Original Decision Data Offset\0")),
+        description: Some(empty_message()),
+    },
+    TagInfo {
+        tag: 0x0091,
+        name: Some(message(b"PesonalFunctions\0")),
+        title: Some(message(b"Personal Functions\0")),
+        description: Some(empty_message()),
+    },
+    TagInfo {
+        tag: 0x0092,
+        name: Some(message(b"PersonalFunctionsValues\0")),
+        title: Some(message(b"Personal Functions Values\0")),
+        description: Some(empty_message()),
+    },
+    TagInfo {
+        tag: 0x0093,
+        name: Some(message(b"FileInfo\0")),
+        title: Some(message(b"File Info\0")),
+        description: Some(empty_message()),
+    },
+    TagInfo {
+        tag: 0x0095,
+        name: Some(message(b"LensModel\0")),
+        title: Some(message(b"Lens Model\0")),
+        description: Some(empty_message()),
+    },
+    TagInfo {
+        tag: 0x0096,
+        name: Some(message(b"CMOSSerialNumber\0")),
+        title: Some(message(b"CMOS Serial Number\0")),
+        description: Some(empty_message()),
+    },
+    TagInfo {
+        tag: 0x0097,
+        name: Some(message(b"DustRemovalData\0")),
+        title: Some(message(b"Dust Removal Data\0")),
+        description: Some(empty_message()),
+    },
+    TagInfo {
+        tag: 0x0098,
+        name: Some(message(b"CropInfo\0")),
+        title: Some(message(b"Crop Info\0")),
+        description: Some(empty_message()),
+    },
+    TagInfo {
+        tag: 0x0099,
+        name: Some(message(b"CustomFunctions2\0")),
+        title: Some(message(b"Custom Functions 2\0")),
+        description: Some(empty_message()),
+    },
+    TagInfo {
+        tag: 0x009a,
+        name: Some(message(b"AspectInfo\0")),
+        title: Some(message(b"Aspect Info\0")),
+        description: Some(empty_message()),
+    },
+    TagInfo {
+        tag: 0x00a1,
+        name: Some(message(b"ToneCurveTable\0")),
+        title: Some(message(b"Tone Curve Table\0")),
+        description: Some(empty_message()),
+    },
+    TagInfo {
+        tag: 0x00a2,
+        name: Some(message(b"SharpnessTable\0")),
+        title: Some(message(b"Sharpness Table\0")),
+        description: Some(empty_message()),
+    },
+    TagInfo {
+        tag: 0x00a3,
+        name: Some(message(b"SharpnessFreqTable\0")),
+        title: Some(message(b"Sharpness Frequency Table\0")),
+        description: Some(empty_message()),
+    },
+    TagInfo {
+        tag: 0x00a3,
+        name: Some(message(b"WhitebalanceTable\0")),
+        title: Some(message(b"Whitebalance Table\0")),
+        description: Some(empty_message()),
+    },
+    TagInfo {
+        tag: 0x00a9,
+        name: Some(message(b"ColorBalance\0")),
+        title: Some(message(b"Color Balance\0")),
+        description: Some(empty_message()),
+    },
+    TagInfo {
+        tag: 0x00aa,
+        name: Some(message(b"MeasuredColor\0")),
+        title: Some(message(b"Measured Color\0")),
+        description: Some(empty_message()),
+    },
+    TagInfo {
+        tag: 0x00ae,
+        name: Some(message(b"ColorTemperature\0")),
+        title: Some(message(b"Color Temperature\0")),
+        description: Some(empty_message()),
+    },
+    TagInfo {
+        tag: 0x00b0,
+        name: Some(message(b"CanonFlags\0")),
+        title: Some(message(b"Canon Flags\0")),
+        description: Some(empty_message()),
+    },
+    TagInfo {
+        tag: 0x00b1,
+        name: Some(message(b"ModifiedInfo\0")),
+        title: Some(message(b"Modified Info\0")),
+        description: Some(empty_message()),
+    },
+    TagInfo {
+        tag: 0x00b2,
+        name: Some(message(b"TonecurveMatching\0")),
+        title: Some(message(b"Tonecurve Matching\0")),
+        description: Some(empty_message()),
+    },
+    TagInfo {
+        tag: 0x00b3,
+        name: Some(message(b"WhitebalanceMatching\0")),
+        title: Some(message(b"Whitebalance Matching\0")),
+        description: Some(empty_message()),
+    },
+    TagInfo {
+        tag: 0x00b4,
+        name: Some(message(b"ColorSpace\0")),
+        title: Some(message(b"Color Space\0")),
+        description: Some(empty_message()),
+    },
+    TagInfo {
+        tag: 0x00b6,
+        name: Some(message(b"PreviewImageInfo\0")),
+        title: Some(message(b"Preview Image Info\0")),
+        description: Some(empty_message()),
+    },
+    TagInfo {
+        tag: 0x00d0,
+        name: Some(message(b"VRDOffset\0")),
+        title: Some(message(b"VRD Offset\0")),
+        description: Some(empty_message()),
+    },
+    TagInfo {
+        tag: 0x00e0,
+        name: Some(message(b"SensorInfo\0")),
+        title: Some(message(b"Sensor Info\0")),
+        description: Some(empty_message()),
+    },
+    TagInfo {
+        tag: 0x4001,
+        name: Some(message(b"WBPacket\0")),
+        title: Some(message(b"WB Packet\0")),
+        description: Some(empty_message()),
+    },
+    TagInfo {
+        tag: 0x4005,
+        name: Some(message(b"Flavor\0")),
+        title: Some(message(b"Flavor\0")),
+        description: Some(empty_message()),
+    },
+    TagInfo {
+        tag: 0x4008,
+        name: Some(message(b"PictureStyleUserDef\0")),
+        title: Some(message(b"Picture Style Userdefined\0")),
+        description: Some(empty_message()),
+    },
+    TagInfo {
+        tag: 0x4009,
+        name: Some(message(b"PictureStylePC\0")),
+        title: Some(message(b"Picture Style PC\0")),
+        description: Some(empty_message()),
+    },
+    TagInfo {
+        tag: 0x4010,
+        name: Some(message(b"CustomPictureStyleFN\0")),
+        title: Some(message(b"Custom Picture Style Filename\0")),
+        description: Some(empty_message()),
+    },
+    TagInfo {
+        tag: 0x4013,
+        name: Some(message(b"AFMicroAdjust\0")),
+        title: Some(message(b"AF Micro Adjust\0")),
+        description: Some(empty_message()),
+    },
+    TagInfo {
+        tag: 0x4015,
+        name: Some(message(b"VignettingCorrect\0")),
+        title: Some(message(b"Vignetting Correct\0")),
+        description: Some(empty_message()),
+    },
+    TagInfo {
+        tag: 0x4016,
+        name: Some(message(b"VignettingCorrect2\0")),
+        title: Some(message(b"Vignetting Correct 2\0")),
+        description: Some(empty_message()),
+    },
+    TagInfo {
+        tag: 0x4018,
+        name: Some(message(b"LightingOpt\0")),
+        title: Some(message(b"LightingOpt\0")),
+        description: Some(empty_message()),
+    },
+    TagInfo {
+        tag: 0x4019,
+        name: Some(message(b"LensInfo\0")),
+        title: Some(message(b"Lens Info\0")),
+        description: Some(empty_message()),
+    },
+    TagInfo {
+        tag: 0x4020,
+        name: Some(message(b"AmbienceInfo\0")),
+        title: Some(message(b"Ambience_Info\0")),
+        description: Some(empty_message()),
+    },
+    TagInfo {
+        tag: 0x4021,
+        name: Some(message(b"MultiExposure\0")),
+        title: Some(message(b"Multi Exposure\0")),
+        description: Some(empty_message()),
+    },
+    TagInfo {
+        tag: 0x4024,
+        name: Some(message(b"FilterInfo\0")),
+        title: Some(message(b"Filter Info\0")),
+        description: Some(empty_message()),
+    },
+    TagInfo {
+        tag: 0x4025,
+        name: Some(message(b"HDRInfo\0")),
+        title: Some(message(b"HDR Info\0")),
+        description: Some(empty_message()),
+    },
+    TagInfo {
+        tag: 0x4028,
+        name: Some(message(b"AFConfig\0")),
+        title: Some(message(b"AF Config\0")),
+        description: Some(empty_message()),
+    },
+    TagInfo {
+        tag: 0x403f,
+        name: Some(message(b"RawBurstInfo\0")),
+        title: Some(message(b"Raw Burst Info\0")),
+        description: Some(empty_message()),
+    },
+];
+
+fn canon_tag_name_impl(tag: MnoteCanonTag) -> *const c_char {
+    tag_name_from_table(CANON_TAGS, tag)
 }
 
-fn canon_tag_title_impl(tag: MnoteCanonTag) -> Option<&'static [u8]> {
-    match tag {
-        0x0001 => Some(b"Settings (First Part)\0"),
-        0x0002 => Some(b"Focal Length\0"),
-        0x0004 => Some(b"Settings (Second Part)\0"),
-        0x0005 => Some(b"Panorama\0"),
-        0x0006 => Some(b"Image Type\0"),
-        0x0007 => Some(b"Firmware Version\0"),
-        0x0008 => Some(b"Image Number\0"),
-        0x0009 => Some(b"Owner Name\0"),
-        0x000c => Some(b"Serial Number\0"),
-        MNOTE_CANON_TAG_CAMERA_INFO => Some(b"Camera Info\0"),
-        0x000f => Some(b"Custom Functions\0"),
-        MNOTE_CANON_TAG_MODEL_ID => Some(b"Model ID\0"),
-        MNOTE_CANON_TAG_AF_INFO => Some(b"AF Info\0"),
-        MNOTE_CANON_TAG_THUMBNAIL_VALID_AREA => Some(b"Thumbnail Valid Area\0"),
-        0x00a0 => Some(b"Color Information\0"),
-        _ => None,
-    }
+fn canon_tag_title_impl(tag: MnoteCanonTag) -> *const c_char {
+    tag_title_from_table(CANON_TAGS, tag)
+}
+
+fn canon_tag_description_impl(tag: MnoteCanonTag) -> *const c_char {
+    tag_description_from_table(CANON_TAGS, tag)
 }
 
 unsafe fn log_simple(note: *mut ExifMnoteDataCanon, code: ExifLogCode, format: &[u8]) {
@@ -1152,7 +1577,7 @@ unsafe extern "C" fn exif_mnote_data_canon_get_name(
     {
         return ptr::null();
     }
-    canon_tag_name_impl(tag).map_or(ptr::null(), |name| name.as_ptr().cast())
+    canon_tag_name_impl(tag)
 }
 
 unsafe extern "C" fn exif_mnote_data_canon_get_title(
@@ -1178,7 +1603,7 @@ unsafe extern "C" fn exif_mnote_data_canon_get_title(
     {
         return ptr::null();
     }
-    canon_tag_title_impl(tag).map_or(ptr::null(), |title| title.as_ptr().cast())
+    canon_tag_title_impl(tag)
 }
 
 unsafe extern "C" fn exif_mnote_data_canon_get_description(
@@ -1194,7 +1619,8 @@ unsafe extern "C" fn exif_mnote_data_canon_get_description(
     if entry_index >= unsafe { (*note).count } {
         return ptr::null();
     }
-    b"\0".as_ptr().cast()
+    let tag = unsafe { (*(*note).entries.add(entry_index as usize)).tag };
+    canon_tag_description_impl(tag)
 }
 
 pub(crate) unsafe fn identify_impl(data: *const ExifData, _entry: *const ExifEntry) -> c_int {
@@ -1506,32 +1932,15 @@ pub unsafe extern "C" fn mnote_canon_entry_get_value(
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn mnote_canon_tag_get_description(tag: MnoteCanonTag) -> *const c_char {
-    panic_boundary::call_or(ptr::null(), || match tag {
-        MNOTE_CANON_TAG_SETTINGS_1
-        | MNOTE_CANON_TAG_FOCAL_LENGTH
-        | MNOTE_CANON_TAG_SETTINGS_2
-        | MNOTE_CANON_TAG_PANORAMA
-        | MNOTE_CANON_TAG_IMAGE_TYPE
-        | MNOTE_CANON_TAG_FIRMWARE
-        | MNOTE_CANON_TAG_IMAGE_NUMBER
-        | MNOTE_CANON_TAG_OWNER
-        | MNOTE_CANON_TAG_SERIAL_NUMBER
-        | MNOTE_CANON_TAG_CUSTOM_FUNCS
-        | MNOTE_CANON_TAG_COLOR_INFORMATION => b"\0".as_ptr().cast(),
-        _ => ptr::null(),
-    })
+    panic_boundary::call_or(ptr::null(), || canon_tag_description_impl(tag))
 }
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn mnote_canon_tag_get_name(tag: MnoteCanonTag) -> *const c_char {
-    panic_boundary::call_or(ptr::null(), || {
-        canon_tag_name_impl(tag).map_or(ptr::null(), |name| name.as_ptr().cast())
-    })
+    panic_boundary::call_or(ptr::null(), || canon_tag_name_impl(tag))
 }
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn mnote_canon_tag_get_title(tag: MnoteCanonTag) -> *const c_char {
-    panic_boundary::call_or(ptr::null(), || {
-        canon_tag_title_impl(tag).map_or(ptr::null(), |title| title.as_ptr().cast())
-    })
+    panic_boundary::call_or(ptr::null(), || canon_tag_title_impl(tag))
 }

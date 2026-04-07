@@ -11,9 +11,11 @@ use crate::ffi::types::{
     EXIF_FORMAT_RATIONAL, EXIF_FORMAT_SHORT, EXIF_FORMAT_SLONG, EXIF_FORMAT_SRATIONAL,
     EXIF_FORMAT_SSHORT, EXIF_FORMAT_UNDEFINED,
 };
+use crate::i18n::{empty_message, message};
 use crate::mnote::base::{
-    check_overflow, invalid_components_message, invalid_format_message, write_slice_to_buffer,
-    write_str_to_buffer, zero_buffer,
+    check_overflow, invalid_components_message, invalid_format_message, tag_description_from_table,
+    tag_name_from_table, tag_title_from_table, write_slice_to_buffer, write_str_to_buffer,
+    zero_buffer, TagInfo,
 };
 use crate::primitives::format::exif_format_get_size_impl;
 use crate::primitives::utils::{
@@ -547,136 +549,1107 @@ unsafe fn olympus_note(note: *mut ExifMnoteData) -> *mut ExifMnoteDataOlympus {
     note.cast()
 }
 
-fn olympus_tag_name_impl(tag: MnoteOlympusTag) -> Option<&'static [u8]> {
-    match tag {
-        MNOTE_NIKON_TAG_FIRMWARE => Some(b"Firmware\0"),
-        MNOTE_NIKON_TAG_ISO => Some(b"ISO\0"),
-        MNOTE_NIKON_TAG_COLORMODE1 => Some(b"ColorMode1\0"),
-        MNOTE_NIKON_TAG_QUALITY => Some(b"Quality\0"),
-        MNOTE_NIKON_TAG_WHITEBALANCE => Some(b"WhiteBalance\0"),
-        MNOTE_NIKON_TAG_SHARPENING => Some(b"Sharpening\0"),
-        MNOTE_NIKON_TAG_FOCUSMODE => Some(b"FocusMode\0"),
-        MNOTE_NIKON_TAG_FLASHSETTING => Some(b"FlashSetting\0"),
-        MNOTE_NIKON_TAG_FLASHMODE => Some(b"FlashMode\0"),
-        MNOTE_NIKON_TAG_WHITEBALANCEFINE => Some(b"WhiteBalanceFine\0"),
-        MNOTE_NIKON_TAG_ISOSELECTION => Some(b"ISOSelection\0"),
-        MNOTE_NIKON_TAG_PREVIEWIMAGE => Some(b"PreviewImage\0"),
-        MNOTE_NIKON_TAG_FACEDETECT => Some(b"FaceDetect\0"),
-        MNOTE_NIKON_TAG_IMAGEADJUSTMENT => Some(b"ImageAdjustment\0"),
-        MNOTE_NIKON_TAG_MANUALFOCUSDISTANCE => Some(b"ManualFocusDistance\0"),
-        MNOTE_NIKON_TAG_DIGITALZOOM => Some(b"DigitalZoom\0"),
-        MNOTE_NIKON_TAG_AFFOCUSPOSITION => Some(b"AFFocusPosition\0"),
-        MNOTE_NIKON_TAG_SHOTINFO => Some(b"ShotInfo\0"),
-        MNOTE_NIKON_TAG_SATURATION => Some(b"Saturation\0"),
-        MNOTE_NIKON_TAG_NOISEREDUCTION => Some(b"NoiseReduction,\0"),
-        MNOTE_NIKON_TAG_RETOUCHHISTORY => Some(b"RetouchHistory\0"),
-        MNOTE_OLYMPUS_TAG_THUMBNAILIMAGE => Some(b"ThumbnailImage\0"),
-        MNOTE_OLYMPUS_TAG_MODE => Some(b"Mode\0"),
-        MNOTE_OLYMPUS_TAG_QUALITY => Some(b"Quality\0"),
-        MNOTE_OLYMPUS_TAG_MACRO => Some(b"Macro\0"),
-        MNOTE_OLYMPUS_TAG_BWMODE => Some(b"BWMode\0"),
-        MNOTE_OLYMPUS_TAG_DIGIZOOM => Some(b"DigiZoom\0"),
-        MNOTE_OLYMPUS_TAG_FOCALPLANEDIAGONAL => Some(b"FocalPlaneDiagonal\0"),
-        MNOTE_OLYMPUS_TAG_LENSDISTORTION => Some(b"LensDistortionParams\0"),
-        MNOTE_OLYMPUS_TAG_VERSION => Some(b"FirmwareVersion\0"),
-        MNOTE_OLYMPUS_TAG_INFO => Some(b"Info\0"),
-        MNOTE_OLYMPUS_TAG_ID => Some(b"CameraID\0"),
-        MNOTE_OLYMPUS_TAG_DATADUMP => Some(b"DataDump\0"),
-        MNOTE_SANYO_TAG_SEQUENTIALSHOT => Some(b"SequentialShot\0"),
-        MNOTE_SANYO_TAG_WIDERANGE => Some(b"WideRange\0"),
-        MNOTE_SANYO_TAG_COLORADJUSTMENTMODE => Some(b"ColorAdjustmentMode\0"),
-        MNOTE_SANYO_TAG_FOCUSMODE => Some(b"FocusMode\0"),
-        MNOTE_SANYO_TAG_QUICKSHOT => Some(b"QuickShot\0"),
-        MNOTE_SANYO_TAG_SELFTIMER => Some(b"SelfTimer\0"),
-        MNOTE_SANYO_TAG_VOICEMEMO => Some(b"VoiceMemo\0"),
-        MNOTE_SANYO_TAG_RECORDSHUTTERRELEASE => Some(b"RecordShutterRelease\0"),
-        MNOTE_SANYO_TAG_FLICKERREDUCE => Some(b"FlickerReduce\0"),
-        MNOTE_SANYO_TAG_OPTICALZOOM => Some(b"OpticalZoom\0"),
-        MNOTE_SANYO_TAG_CCDSENSITIVITY => Some(b"CCDSensitivity\0"),
-        MNOTE_SANYO_TAG_DIGITALZOOM => Some(b"DigitalZoom\0"),
-        MNOTE_SANYO_TAG_LIGHTSOURCESPECIAL => Some(b"LightSourceSpecial\0"),
-        MNOTE_SANYO_TAG_RESAVED => Some(b"Resaved\0"),
-        MNOTE_SANYO_TAG_SCENESELECT => Some(b"SceneSelect\0"),
-        MNOTE_SANYO_TAG_MANUALFOCUSDISTANCE => Some(b"ManualFocusDistance\0"),
-        MNOTE_SANYO_TAG_SEQUENCESHOTINTERVAL => Some(b"SequenceShotInterval\0"),
-        MNOTE_OLYMPUS_TAG_FLASHMODE => Some(b"FlashMode\0"),
-        MNOTE_OLYMPUS_TAG_FLASHDEVICE => Some(b"FlashDevice\0"),
-        MNOTE_OLYMPUS_TAG_FOCUSDIST => Some(b"ManualFocusDistance\0"),
-        MNOTE_OLYMPUS_TAG_WBALANCE => Some(b"WhiteBalance\0"),
-        MNOTE_OLYMPUS_TAG_REDBALANCE => Some(b"RedBalance\0"),
-        MNOTE_OLYMPUS_TAG_BLUEBALANCE => Some(b"BlueBalance\0"),
-        MNOTE_OLYMPUS_TAG_BLACKLEVEL => Some(b"BlackLevel\0"),
-        MNOTE_OLYMPUS_TAG_COLORMATRIX => Some(b"ColorMatrix\0"),
-        MNOTE_OLYMPUS_TAG_PREVIEWIMAGEVALID => Some(b"PreviewImageValid\0"),
-        MNOTE_OLYMPUS_TAG_NOISEREDUCTION => Some(b"NoiseReduction\0"),
-        _ => None,
-    }
+const OLYMPUS_TAGS: &[TagInfo] = &[
+    TagInfo {
+        tag: 0x0001,
+        name: Some(message(b"Firmware\0")),
+        title: Some(message(b"Firmware Version\0")),
+        description: Some(empty_message()),
+    },
+    TagInfo {
+        tag: 0x0002,
+        name: Some(message(b"ISO\0")),
+        title: Some(message(b"ISO Setting\0")),
+        description: Some(empty_message()),
+    },
+    TagInfo {
+        tag: 0x0003,
+        name: Some(message(b"ColorMode1\0")),
+        title: Some(message(b"Color Mode (?)\0")),
+        description: Some(empty_message()),
+    },
+    TagInfo {
+        tag: 0x0004,
+        name: Some(message(b"Quality\0")),
+        title: Some(message(b"Quality\0")),
+        description: Some(empty_message()),
+    },
+    TagInfo {
+        tag: 0x0005,
+        name: Some(message(b"WhiteBalance\0")),
+        title: Some(message(b"White Balance\0")),
+        description: Some(empty_message()),
+    },
+    TagInfo {
+        tag: 0x0006,
+        name: Some(message(b"Sharpening\0")),
+        title: Some(message(b"Image Sharpening\0")),
+        description: Some(empty_message()),
+    },
+    TagInfo {
+        tag: 0x0007,
+        name: Some(message(b"FocusMode\0")),
+        title: Some(message(b"Focus Mode\0")),
+        description: Some(empty_message()),
+    },
+    TagInfo {
+        tag: 0x0008,
+        name: Some(message(b"FlashSetting\0")),
+        title: Some(message(b"Flash Setting\0")),
+        description: Some(empty_message()),
+    },
+    TagInfo {
+        tag: 0x0009,
+        name: Some(message(b"FlashMode\0")),
+        title: Some(message(b"Flash Mode\0")),
+        description: Some(empty_message()),
+    },
+    TagInfo {
+        tag: 0x000b,
+        name: Some(message(b"WhiteBalanceFine\0")),
+        title: Some(message(b"White Balance Fine Adjustment\0")),
+        description: Some(empty_message()),
+    },
+    TagInfo {
+        tag: 0x000c,
+        name: Some(message(b"WhiteBalanceRB\0")),
+        title: Some(message(b"White Balance RB\0")),
+        description: Some(empty_message()),
+    },
+    TagInfo {
+        tag: 0x000d,
+        name: Some(message(b"ProgramShift\0")),
+        title: Some(message(b"Program Shift\0")),
+        description: Some(empty_message()),
+    },
+    TagInfo {
+        tag: 0x000f,
+        name: Some(message(b"ISOSelection\0")),
+        title: Some(message(b"ISO Selection\0")),
+        description: Some(empty_message()),
+    },
+    TagInfo {
+        tag: 0x0011,
+        name: Some(message(b"PreviewImage\0")),
+        title: Some(message(b"Preview Image IFD\0")),
+        description: Some(message(
+            b"Offset of the preview image directory (IFD) inside the file.\0",
+        )),
+    },
+    TagInfo {
+        tag: 0x000e,
+        name: Some(message(b"ExposureDiff\0")),
+        title: Some(message(b"Exposurediff ?\0")),
+        description: Some(empty_message()),
+    },
+    TagInfo {
+        tag: 0x0012,
+        name: Some(message(b"FlashExpCompensation\0")),
+        title: Some(message(b"Flash Exposure Compensation\0")),
+        description: Some(empty_message()),
+    },
+    TagInfo {
+        tag: 0x0013,
+        name: Some(message(b"ISO\0")),
+        title: Some(message(b"ISO Setting\0")),
+        description: Some(empty_message()),
+    },
+    TagInfo {
+        tag: 0x0016,
+        name: Some(message(b"ImageBoundary\0")),
+        title: Some(message(b"Image Boundary\0")),
+        description: Some(empty_message()),
+    },
+    TagInfo {
+        tag: 0x0017,
+        name: Some(message(b"ExternalFlashExpCompensation\0")),
+        title: Some(message(b"External Flash Exposure Compensation\0")),
+        description: Some(empty_message()),
+    },
+    TagInfo {
+        tag: 0x0018,
+        name: Some(message(b"FlashExposureBracketVal\0")),
+        title: Some(message(b"Flash Exposure Bracket Value\0")),
+        description: Some(empty_message()),
+    },
+    TagInfo {
+        tag: 0x0019,
+        name: Some(message(b"ExposureBracketVal\0")),
+        title: Some(message(b"Exposure Bracket Value\0")),
+        description: Some(empty_message()),
+    },
+    TagInfo {
+        tag: 0x0080,
+        name: Some(message(b"ImageAdjustment\0")),
+        title: Some(message(b"Image Adjustment\0")),
+        description: Some(empty_message()),
+    },
+    TagInfo {
+        tag: 0x0081,
+        name: Some(message(b"ToneCompensation\0")),
+        title: Some(message(b"Tone Compensation\0")),
+        description: Some(empty_message()),
+    },
+    TagInfo {
+        tag: 0x0082,
+        name: Some(message(b"Adapter\0")),
+        title: Some(message(b"Adapter\0")),
+        description: Some(empty_message()),
+    },
+    TagInfo {
+        tag: 0x0083,
+        name: Some(message(b"LensType\0")),
+        title: Some(message(b"Lens Type\0")),
+        description: Some(empty_message()),
+    },
+    TagInfo {
+        tag: 0x0084,
+        name: Some(message(b"Lens\0")),
+        title: Some(message(b"Lens\0")),
+        description: Some(empty_message()),
+    },
+    TagInfo {
+        tag: 0x0085,
+        name: Some(message(b"ManualFocusDistance\0")),
+        title: Some(message(b"Manual Focus Distance\0")),
+        description: Some(empty_message()),
+    },
+    TagInfo {
+        tag: 0x0086,
+        name: Some(message(b"DigitalZoom\0")),
+        title: Some(message(b"Digital Zoom\0")),
+        description: Some(empty_message()),
+    },
+    TagInfo {
+        tag: 0x0087,
+        name: Some(message(b"FlashUsed\0")),
+        title: Some(message(b"Flash Used\0")),
+        description: Some(empty_message()),
+    },
+    TagInfo {
+        tag: 0x0088,
+        name: Some(message(b"AFFocusPosition\0")),
+        title: Some(message(b"AF Focus Position\0")),
+        description: Some(empty_message()),
+    },
+    TagInfo {
+        tag: 0x0089,
+        name: Some(message(b"Bracketing\0")),
+        title: Some(message(b"Bracketing\0")),
+        description: Some(empty_message()),
+    },
+    TagInfo {
+        tag: 0x008a,
+        name: None,
+        title: None,
+        description: Some(empty_message()),
+    },
+    TagInfo {
+        tag: 0x008b,
+        name: Some(message(b"LensFStops\0")),
+        title: Some(message(b"Lens F Stops\0")),
+        description: Some(empty_message()),
+    },
+    TagInfo {
+        tag: 0x008c,
+        name: Some(message(b"Curve,\0")),
+        title: Some(message(b"Contrast Curve\0")),
+        description: Some(empty_message()),
+    },
+    TagInfo {
+        tag: 0x008d,
+        name: Some(message(b"ColorMode,\0")),
+        title: Some(message(b"Color Mode\0")),
+        description: Some(empty_message()),
+    },
+    TagInfo {
+        tag: 0x0090,
+        name: Some(message(b"LightType,\0")),
+        title: Some(message(b"Light Type\0")),
+        description: Some(empty_message()),
+    },
+    TagInfo {
+        tag: 0x0091,
+        name: Some(message(b"ShotInfo\0")),
+        title: Some(message(b"Shot Info\0")),
+        description: Some(empty_message()),
+    },
+    TagInfo {
+        tag: 0x0092,
+        name: Some(message(b"Hue\0")),
+        title: Some(message(b"Hue Adjustment\0")),
+        description: Some(empty_message()),
+    },
+    TagInfo {
+        tag: 0x0094,
+        name: Some(message(b"Saturation\0")),
+        title: Some(message(b"Saturation\0")),
+        description: Some(empty_message()),
+    },
+    TagInfo {
+        tag: 0x0095,
+        name: Some(message(b"NoiseReduction,\0")),
+        title: Some(message(b"Noise Reduction\0")),
+        description: Some(empty_message()),
+    },
+    TagInfo {
+        tag: 0x0097,
+        name: Some(message(b"ColorBalance\0")),
+        title: Some(message(b"Color Balance\0")),
+        description: Some(empty_message()),
+    },
+    TagInfo {
+        tag: 0x0098,
+        name: Some(message(b"LensData\0")),
+        title: Some(message(b"Lens Data\0")),
+        description: Some(empty_message()),
+    },
+    TagInfo {
+        tag: 0x009a,
+        name: Some(message(b"SensorPixelSize\0")),
+        title: Some(message(b"Sensor Pixel Size\0")),
+        description: Some(empty_message()),
+    },
+    TagInfo {
+        tag: 0x009b,
+        name: None,
+        title: None,
+        description: Some(empty_message()),
+    },
+    TagInfo {
+        tag: 0x009e,
+        name: Some(message(b"RetouchHistory\0")),
+        title: Some(message(b"Retouch History\0")),
+        description: Some(empty_message()),
+    },
+    TagInfo {
+        tag: 0x001d,
+        name: Some(message(b"SerialNumber\0")),
+        title: Some(message(b"Serial Number\0")),
+        description: Some(empty_message()),
+    },
+    TagInfo {
+        tag: 0x00a2,
+        name: Some(message(b"ImageDataSize\0")),
+        title: Some(message(b"Image Data Size\0")),
+        description: Some(message(b"Size of compressed image data in bytes.\0")),
+    },
+    TagInfo {
+        tag: 0x00a3,
+        name: None,
+        title: None,
+        description: Some(empty_message()),
+    },
+    TagInfo {
+        tag: 0x00a7,
+        name: Some(message(b"TotalPictures,\0")),
+        title: Some(message(b"Total Number of Pictures Taken\0")),
+        description: Some(empty_message()),
+    },
+    TagInfo {
+        tag: 0x00a8,
+        name: Some(message(b"FlashInfo\0")),
+        title: Some(message(b"Flash Info\0")),
+        description: Some(empty_message()),
+    },
+    TagInfo {
+        tag: 0x00a9,
+        name: Some(message(b"Optimization,\0")),
+        title: Some(message(b"Optimize Image\0")),
+        description: Some(empty_message()),
+    },
+    TagInfo {
+        tag: 0x0094,
+        name: Some(message(b"Saturation\0")),
+        title: Some(message(b"Saturation\0")),
+        description: Some(empty_message()),
+    },
+    TagInfo {
+        tag: 0x00ab,
+        name: Some(message(b"VariProgram\0")),
+        title: Some(message(b"Vari Program\0")),
+        description: Some(empty_message()),
+    },
+    TagInfo {
+        tag: 0x0e01,
+        name: Some(message(b"CaptureEditorData\0")),
+        title: Some(message(b"Capture Editor Data\0")),
+        description: Some(empty_message()),
+    },
+    TagInfo {
+        tag: 0x0e09,
+        name: Some(message(b"CaptureEditorVer\0")),
+        title: Some(message(b"Capture Editor Version\0")),
+        description: Some(empty_message()),
+    },
+    TagInfo {
+        tag: 0x0e0e,
+        name: None,
+        title: None,
+        description: Some(empty_message()),
+    },
+    TagInfo {
+        tag: 0x0e10,
+        name: None,
+        title: None,
+        description: Some(empty_message()),
+    },
+    TagInfo {
+        tag: 0x001b,
+        name: Some(message(b"CropHiSpeed\0")),
+        title: Some(message(b"Crop HiSpeed\0")),
+        description: Some(empty_message()),
+    },
+    TagInfo {
+        tag: 0x001c,
+        name: Some(message(b"ExposureTuning\0")),
+        title: Some(message(b"Exposure Tuning\0")),
+        description: Some(empty_message()),
+    },
+    TagInfo {
+        tag: 0x001e,
+        name: Some(message(b"ColorSpace\0")),
+        title: Some(message(b"Color Space\0")),
+        description: Some(empty_message()),
+    },
+    TagInfo {
+        tag: 0x001f,
+        name: Some(message(b"VRInfo\0")),
+        title: Some(message(b"VR Info\0")),
+        description: Some(empty_message()),
+    },
+    TagInfo {
+        tag: 0x0020,
+        name: Some(message(b"ImageAuthentication\0")),
+        title: Some(message(b"Image Authentication\0")),
+        description: Some(empty_message()),
+    },
+    TagInfo {
+        tag: 0x0021,
+        name: Some(message(b"FaceDetect\0")),
+        title: Some(message(b"Face Detect\0")),
+        description: Some(empty_message()),
+    },
+    TagInfo {
+        tag: 0x0022,
+        name: Some(message(b"ActiveDLighting\0")),
+        title: Some(message(b"Active DLighting\0")),
+        description: Some(empty_message()),
+    },
+    TagInfo {
+        tag: 0x0023,
+        name: Some(message(b"PictureControlData\0")),
+        title: Some(message(b"Picture Control Data\0")),
+        description: Some(empty_message()),
+    },
+    TagInfo {
+        tag: 0x0024,
+        name: Some(message(b"WorldTime\0")),
+        title: Some(message(b"World Time\0")),
+        description: Some(empty_message()),
+    },
+    TagInfo {
+        tag: 0x0025,
+        name: Some(message(b"ISOInfo\0")),
+        title: Some(message(b"ISO Info\0")),
+        description: Some(empty_message()),
+    },
+    TagInfo {
+        tag: 0x002a,
+        name: Some(message(b"VignetteControl\0")),
+        title: Some(message(b"Vignette Control\0")),
+        description: Some(empty_message()),
+    },
+    TagInfo {
+        tag: 0x002b,
+        name: Some(message(b"DistortInfo\0")),
+        title: Some(message(b"Distort Info\0")),
+        description: Some(empty_message()),
+    },
+    TagInfo {
+        tag: 0x0034,
+        name: Some(message(b"ShutterMode\0")),
+        title: Some(message(b"Shutter Mode\0")),
+        description: Some(empty_message()),
+    },
+    TagInfo {
+        tag: 0x0035,
+        name: Some(message(b"HDRInfo\0")),
+        title: Some(message(b"HDR Info\0")),
+        description: Some(empty_message()),
+    },
+    TagInfo {
+        tag: 0x0037,
+        name: Some(message(b"MechanicalShutterCount\0")),
+        title: Some(message(b"Mechanical Shutter Count\0")),
+        description: Some(empty_message()),
+    },
+    TagInfo {
+        tag: 0x0039,
+        name: Some(message(b"LocationInfo\0")),
+        title: Some(message(b"MNOTE_NIKON_TAG_LOCATIONINFO\0")),
+        description: Some(empty_message()),
+    },
+    TagInfo {
+        tag: 0x003d,
+        name: Some(message(b"BlackLevel\0")),
+        title: Some(message(b"Black Level\0")),
+        description: Some(empty_message()),
+    },
+    TagInfo {
+        tag: 0x003e,
+        name: Some(message(b"ImageSizeRaw\0")),
+        title: Some(message(b"Image Size Raw\0")),
+        description: Some(empty_message()),
+    },
+    TagInfo {
+        tag: 0x0045,
+        name: Some(message(b"CropArea\0")),
+        title: Some(message(b"Crop Area\0")),
+        description: Some(empty_message()),
+    },
+    TagInfo {
+        tag: 0x004e,
+        name: Some(message(b"NikonSettings\0")),
+        title: Some(message(b"Nikon Settings\0")),
+        description: Some(empty_message()),
+    },
+    TagInfo {
+        tag: 0x004f,
+        name: Some(message(b"ColorTemperatureAuto\0")),
+        title: Some(message(b"Color Temperature Auto\0")),
+        description: Some(empty_message()),
+    },
+    TagInfo {
+        tag: 0x00a0,
+        name: Some(message(b"SerialNumber2\0")),
+        title: Some(message(b"Serial Number 2\0")),
+        description: Some(empty_message()),
+    },
+    TagInfo {
+        tag: 0x00aa,
+        name: Some(message(b"Saturation2\0")),
+        title: Some(message(b"Saturation 2\0")),
+        description: Some(empty_message()),
+    },
+    TagInfo {
+        tag: 0x00b0,
+        name: Some(message(b"MultiExposure\0")),
+        title: Some(message(b"Multi Exposure\0")),
+        description: Some(empty_message()),
+    },
+    TagInfo {
+        tag: 0x00b1,
+        name: Some(message(b"HighISONr\0")),
+        title: Some(message(b"High ISO Noise Reduction\0")),
+        description: Some(empty_message()),
+    },
+    TagInfo {
+        tag: 0x00b3,
+        name: Some(message(b"ToningEffect\0")),
+        title: Some(message(b"Toning Effect\0")),
+        description: Some(empty_message()),
+    },
+    TagInfo {
+        tag: 0x00b6,
+        name: Some(message(b"PowerupTime\0")),
+        title: Some(message(b"Powerup Time\0")),
+        description: Some(empty_message()),
+    },
+    TagInfo {
+        tag: 0x00b7,
+        name: Some(message(b"AFInfo2\0")),
+        title: Some(message(b"AF Info 2\0")),
+        description: Some(empty_message()),
+    },
+    TagInfo {
+        tag: 0x00b8,
+        name: Some(message(b"FileInfo\0")),
+        title: Some(message(b"File Info\0")),
+        description: Some(empty_message()),
+    },
+    TagInfo {
+        tag: 0x00bb,
+        name: Some(message(b"RetouchInfo\0")),
+        title: Some(message(b"Retouch Info\0")),
+        description: Some(empty_message()),
+    },
+    TagInfo {
+        tag: 0x0011,
+        name: Some(message(b"PreviewImage\0")),
+        title: Some(message(b"Preview Image\0")),
+        description: Some(empty_message()),
+    },
+    TagInfo {
+        tag: 0x8002,
+        name: None,
+        title: None,
+        description: Some(empty_message()),
+    },
+    TagInfo {
+        tag: 0x8003,
+        name: Some(message(b"Quality\0")),
+        title: Some(message(b"Quality\0")),
+        description: Some(empty_message()),
+    },
+    TagInfo {
+        tag: 0x8004,
+        name: Some(message(b"ColorMode,\0")),
+        title: Some(message(b"Color Mode\0")),
+        description: Some(empty_message()),
+    },
+    TagInfo {
+        tag: 0x8005,
+        name: Some(message(b"ImageAdjustment\0")),
+        title: Some(message(b"Image Adjustment\0")),
+        description: Some(empty_message()),
+    },
+    TagInfo {
+        tag: 0x8006,
+        name: Some(message(b"CCDSensitivity\0")),
+        title: Some(message(b"CCD Sensitivity\0")),
+        description: Some(empty_message()),
+    },
+    TagInfo {
+        tag: 0x8007,
+        name: Some(message(b"WhiteBalance\0")),
+        title: Some(message(b"White Balance\0")),
+        description: Some(empty_message()),
+    },
+    TagInfo {
+        tag: 0x8008,
+        name: Some(message(b"Focus\0")),
+        title: Some(message(b"Focus\0")),
+        description: Some(empty_message()),
+    },
+    TagInfo {
+        tag: 0x8009,
+        name: None,
+        title: None,
+        description: Some(empty_message()),
+    },
+    TagInfo {
+        tag: 0x800a,
+        name: Some(message(b"DigitalZoom\0")),
+        title: Some(message(b"Digital Zoom\0")),
+        description: Some(empty_message()),
+    },
+    TagInfo {
+        tag: 0x800b,
+        name: Some(message(b"Converter\0")),
+        title: Some(message(b"Converter\0")),
+        description: Some(empty_message()),
+    },
+    TagInfo {
+        tag: 0x0100,
+        name: Some(message(b"ThumbnailImage\0")),
+        title: Some(message(b"Thumbnail Image\0")),
+        description: Some(empty_message()),
+    },
+    TagInfo {
+        tag: 0x0200,
+        name: Some(message(b"Mode\0")),
+        title: Some(message(b"Speed/Sequence/Panorama Direction\0")),
+        description: Some(empty_message()),
+    },
+    TagInfo {
+        tag: 0x0201,
+        name: Some(message(b"Quality\0")),
+        title: Some(message(b"Quality\0")),
+        description: Some(empty_message()),
+    },
+    TagInfo {
+        tag: 0x0202,
+        name: Some(message(b"Macro\0")),
+        title: Some(message(b"Macro\0")),
+        description: Some(empty_message()),
+    },
+    TagInfo {
+        tag: 0x0203,
+        name: Some(message(b"BWMode\0")),
+        title: Some(message(b"Black & White Mode\0")),
+        description: Some(empty_message()),
+    },
+    TagInfo {
+        tag: 0x0204,
+        name: Some(message(b"DigiZoom\0")),
+        title: Some(message(b"Digital Zoom\0")),
+        description: Some(empty_message()),
+    },
+    TagInfo {
+        tag: 0x0205,
+        name: Some(message(b"FocalPlaneDiagonal\0")),
+        title: Some(message(b"Focal Plane Diagonal\0")),
+        description: Some(empty_message()),
+    },
+    TagInfo {
+        tag: 0x0206,
+        name: Some(message(b"LensDistortionParams\0")),
+        title: Some(message(b"Lens Distortion Parameters\0")),
+        description: Some(empty_message()),
+    },
+    TagInfo {
+        tag: 0x0207,
+        name: Some(message(b"FirmwareVersion\0")),
+        title: Some(message(b"Firmware Version\0")),
+        description: Some(empty_message()),
+    },
+    TagInfo {
+        tag: 0x0208,
+        name: Some(message(b"Info\0")),
+        title: Some(message(b"Info\0")),
+        description: Some(empty_message()),
+    },
+    TagInfo {
+        tag: 0x0209,
+        name: Some(message(b"CameraID\0")),
+        title: Some(message(b"Camera ID\0")),
+        description: Some(empty_message()),
+    },
+    TagInfo {
+        tag: 0x0300,
+        name: Some(message(b"PreCaptureFrames\0")),
+        title: Some(message(b"Precapture Frames\0")),
+        description: Some(empty_message()),
+    },
+    TagInfo {
+        tag: 0x0301,
+        name: Some(message(b"WhiteBoard\0")),
+        title: Some(message(b"White Board\0")),
+        description: Some(empty_message()),
+    },
+    TagInfo {
+        tag: 0x0302,
+        name: Some(message(b"OneTouchWB\0")),
+        title: Some(message(b"One Touch White Balance\0")),
+        description: Some(empty_message()),
+    },
+    TagInfo {
+        tag: 0x0303,
+        name: Some(message(b"WhiteBalanceBracket\0")),
+        title: Some(message(b"White Balance Bracket\0")),
+        description: Some(empty_message()),
+    },
+    TagInfo {
+        tag: 0x0304,
+        name: Some(message(b"WhiteBalanceBias\0")),
+        title: Some(message(b"White Balance Bias\0")),
+        description: Some(empty_message()),
+    },
+    TagInfo {
+        tag: 0x0f00,
+        name: Some(message(b"DataDump\0")),
+        title: Some(message(b"Data Dump\0")),
+        description: Some(empty_message()),
+    },
+    TagInfo {
+        tag: 0x0f04,
+        name: None,
+        title: None,
+        description: Some(empty_message()),
+    },
+    TagInfo {
+        tag: 0x1000,
+        name: Some(message(b"ShutterSpeed\0")),
+        title: Some(message(b"Shutter Speed\0")),
+        description: Some(empty_message()),
+    },
+    TagInfo {
+        tag: 0x1001,
+        name: Some(message(b"ISOValue\0")),
+        title: Some(message(b"ISO Value\0")),
+        description: Some(empty_message()),
+    },
+    TagInfo {
+        tag: 0x1002,
+        name: Some(message(b"ApertureValue\0")),
+        title: Some(message(b"Aperture Value\0")),
+        description: Some(empty_message()),
+    },
+    TagInfo {
+        tag: 0x1003,
+        name: Some(message(b"BrightnessValue\0")),
+        title: Some(message(b"Brightness Value\0")),
+        description: Some(empty_message()),
+    },
+    TagInfo {
+        tag: 0x1004,
+        name: Some(message(b"FlashMode\0")),
+        title: Some(message(b"Flash Mode\0")),
+        description: Some(empty_message()),
+    },
+    TagInfo {
+        tag: 0x1005,
+        name: Some(message(b"FlashDevice\0")),
+        title: Some(message(b"Flash Device\0")),
+        description: Some(empty_message()),
+    },
+    TagInfo {
+        tag: 0x1006,
+        name: Some(message(b"ExposureCompensation\0")),
+        title: Some(message(b"Exposure Compensation\0")),
+        description: Some(empty_message()),
+    },
+    TagInfo {
+        tag: 0x1007,
+        name: Some(message(b"SensorTemperature\0")),
+        title: Some(message(b"Sensor Temperature\0")),
+        description: Some(empty_message()),
+    },
+    TagInfo {
+        tag: 0x1008,
+        name: Some(message(b"LensTemperature\0")),
+        title: Some(message(b"Lens Temperature\0")),
+        description: Some(empty_message()),
+    },
+    TagInfo {
+        tag: 0x1009,
+        name: Some(message(b"LightCondition\0")),
+        title: Some(message(b"Light Condition\0")),
+        description: Some(empty_message()),
+    },
+    TagInfo {
+        tag: 0x100a,
+        name: Some(message(b"FocusRange\0")),
+        title: Some(message(b"Focus Range\0")),
+        description: Some(empty_message()),
+    },
+    TagInfo {
+        tag: 0x100b,
+        name: Some(message(b"FocusMode\0")),
+        title: Some(message(b"Focus Mode\0")),
+        description: Some(message(b"Automatic or manual focusing mode\0")),
+    },
+    TagInfo {
+        tag: 0x100c,
+        name: Some(message(b"ManualFocusDistance\0")),
+        title: Some(message(b"Manual Focus Distance\0")),
+        description: Some(empty_message()),
+    },
+    TagInfo {
+        tag: 0x100d,
+        name: Some(message(b"ZoomStepCount\0")),
+        title: Some(message(b"Zoom Step Count\0")),
+        description: Some(empty_message()),
+    },
+    TagInfo {
+        tag: 0x100e,
+        name: Some(message(b"FocusStepCount\0")),
+        title: Some(message(b"Focus Step Count\0")),
+        description: Some(empty_message()),
+    },
+    TagInfo {
+        tag: 0x100f,
+        name: Some(message(b"Sharpness\0")),
+        title: Some(message(b"Sharpness Setting\0")),
+        description: Some(empty_message()),
+    },
+    TagInfo {
+        tag: 0x1010,
+        name: Some(message(b"FlashChargeLevel\0")),
+        title: Some(message(b"Flash Charge Level\0")),
+        description: Some(empty_message()),
+    },
+    TagInfo {
+        tag: 0x1011,
+        name: Some(message(b"ColorMatrix\0")),
+        title: Some(message(b"Color Matrix\0")),
+        description: Some(empty_message()),
+    },
+    TagInfo {
+        tag: 0x1012,
+        name: Some(message(b"BlackLevel\0")),
+        title: Some(message(b"Black Level\0")),
+        description: Some(empty_message()),
+    },
+    TagInfo {
+        tag: 0x1015,
+        name: Some(message(b"WhiteBalance\0")),
+        title: Some(message(b"White Balance Setting\0")),
+        description: Some(empty_message()),
+    },
+    TagInfo {
+        tag: 0x1017,
+        name: Some(message(b"RedBalance\0")),
+        title: Some(message(b"Red Balance\0")),
+        description: Some(empty_message()),
+    },
+    TagInfo {
+        tag: 0x1018,
+        name: Some(message(b"BlueBalance\0")),
+        title: Some(message(b"Blue Balance\0")),
+        description: Some(empty_message()),
+    },
+    TagInfo {
+        tag: 0x1019,
+        name: Some(message(b"ColorMatrixNumber\0")),
+        title: Some(message(b"Color Matrix Number\0")),
+        description: Some(empty_message()),
+    },
+    TagInfo {
+        tag: 0x101a,
+        name: Some(message(b"SerialNumber\0")),
+        title: Some(message(b"Serial Number\0")),
+        description: Some(empty_message()),
+    },
+    TagInfo {
+        tag: 0x1023,
+        name: Some(message(b"FlashExposureComp\0")),
+        title: Some(message(b"Flash Exposure Comp\0")),
+        description: Some(empty_message()),
+    },
+    TagInfo {
+        tag: 0x1024,
+        name: Some(message(b"InternalFlashTable\0")),
+        title: Some(message(b"Internal Flash Table\0")),
+        description: Some(empty_message()),
+    },
+    TagInfo {
+        tag: 0x1025,
+        name: Some(message(b"ExternalFlashGValue\0")),
+        title: Some(message(b"External Flash G Value\0")),
+        description: Some(empty_message()),
+    },
+    TagInfo {
+        tag: 0x1026,
+        name: Some(message(b"ExternalFlashBounce\0")),
+        title: Some(message(b"External Flash Bounce\0")),
+        description: Some(empty_message()),
+    },
+    TagInfo {
+        tag: 0x1027,
+        name: Some(message(b"ExternalFlashZoom\0")),
+        title: Some(message(b"External Flash Zoom\0")),
+        description: Some(empty_message()),
+    },
+    TagInfo {
+        tag: 0x1028,
+        name: Some(message(b"ExternalFlashMode\0")),
+        title: Some(message(b"External Flash Mode\0")),
+        description: Some(empty_message()),
+    },
+    TagInfo {
+        tag: 0x1029,
+        name: Some(message(b"Contrast\0")),
+        title: Some(message(b"Contrast Setting\0")),
+        description: Some(empty_message()),
+    },
+    TagInfo {
+        tag: 0x102a,
+        name: Some(message(b"SharpnessFactor\0")),
+        title: Some(message(b"Sharpness Factor\0")),
+        description: Some(empty_message()),
+    },
+    TagInfo {
+        tag: 0x102b,
+        name: Some(message(b"ColorControl\0")),
+        title: Some(message(b"Color Control\0")),
+        description: Some(empty_message()),
+    },
+    TagInfo {
+        tag: 0x102e,
+        name: Some(message(b"OlympusImageWidth\0")),
+        title: Some(message(b"Olympus Image Width\0")),
+        description: Some(empty_message()),
+    },
+    TagInfo {
+        tag: 0x102f,
+        name: Some(message(b"OlympusImageHeight\0")),
+        title: Some(message(b"Olympus Image Height\0")),
+        description: Some(empty_message()),
+    },
+    TagInfo {
+        tag: 0x1030,
+        name: Some(message(b"SceneDetect\0")),
+        title: Some(message(b"Scene Detect\0")),
+        description: Some(empty_message()),
+    },
+    TagInfo {
+        tag: 0x1034,
+        name: Some(message(b"CompressionRatio\0")),
+        title: Some(message(b"Compression Ratio\0")),
+        description: Some(empty_message()),
+    },
+    TagInfo {
+        tag: 0x1035,
+        name: Some(message(b"PreviewImageValid\0")),
+        title: Some(message(b"Preview Image Valid\0")),
+        description: Some(empty_message()),
+    },
+    TagInfo {
+        tag: 0x1038,
+        name: Some(message(b"AFResult\0")),
+        title: Some(message(b"AF Result\0")),
+        description: Some(empty_message()),
+    },
+    TagInfo {
+        tag: 0x1039,
+        name: Some(message(b"CCDScanMode\0")),
+        title: Some(message(b"CCD Scan Mode\0")),
+        description: Some(empty_message()),
+    },
+    TagInfo {
+        tag: 0x103a,
+        name: Some(message(b"NoiseReduction\0")),
+        title: Some(message(b"Noise Reduction\0")),
+        description: Some(empty_message()),
+    },
+    TagInfo {
+        tag: 0x103b,
+        name: Some(message(b"InfinityLensStep\0")),
+        title: Some(message(b"Infinity Lens Step\0")),
+        description: Some(empty_message()),
+    },
+    TagInfo {
+        tag: 0x103c,
+        name: Some(message(b"NearLensStep\0")),
+        title: Some(message(b"Near Lens Step\0")),
+        description: Some(empty_message()),
+    },
+    TagInfo {
+        tag: 0x103d,
+        name: Some(message(b"LightValueCenter\0")),
+        title: Some(message(b"Light Value Center\0")),
+        description: Some(empty_message()),
+    },
+    TagInfo {
+        tag: 0x103e,
+        name: Some(message(b"LightValuePeriphery\0")),
+        title: Some(message(b"Light Value Periphery\0")),
+        description: Some(empty_message()),
+    },
+    TagInfo {
+        tag: 0x020e,
+        name: Some(message(b"SequentialShot\0")),
+        title: Some(message(b"Sequential Shot\0")),
+        description: Some(empty_message()),
+    },
+    TagInfo {
+        tag: 0x020f,
+        name: Some(message(b"WideRange\0")),
+        title: Some(message(b"Wide Range\0")),
+        description: Some(empty_message()),
+    },
+    TagInfo {
+        tag: 0x0210,
+        name: Some(message(b"ColorAdjustmentMode\0")),
+        title: Some(message(b"Color Adjustment Mode\0")),
+        description: Some(empty_message()),
+    },
+    TagInfo {
+        tag: 0x0212,
+        name: Some(message(b"FocusMode\0")),
+        title: Some(message(b"Focus Mode\0")),
+        description: Some(empty_message()),
+    },
+    TagInfo {
+        tag: 0x0213,
+        name: Some(message(b"QuickShot\0")),
+        title: Some(message(b"Quick Shot\0")),
+        description: Some(empty_message()),
+    },
+    TagInfo {
+        tag: 0x0214,
+        name: Some(message(b"SelfTimer\0")),
+        title: Some(message(b"Self-timer\0")),
+        description: Some(empty_message()),
+    },
+    TagInfo {
+        tag: 0x0216,
+        name: Some(message(b"VoiceMemo\0")),
+        title: Some(message(b"Voice Memo\0")),
+        description: Some(empty_message()),
+    },
+    TagInfo {
+        tag: 0x0217,
+        name: Some(message(b"RecordShutterRelease\0")),
+        title: Some(message(b"Record Shutter Release\0")),
+        description: Some(empty_message()),
+    },
+    TagInfo {
+        tag: 0x0218,
+        name: Some(message(b"FlickerReduce\0")),
+        title: Some(message(b"Flicker Reduce\0")),
+        description: Some(empty_message()),
+    },
+    TagInfo {
+        tag: 0x0219,
+        name: Some(message(b"OpticalZoom\0")),
+        title: Some(message(b"Optical Zoom\0")),
+        description: Some(empty_message()),
+    },
+    TagInfo {
+        tag: 0x021b,
+        name: Some(message(b"DigitalZoom\0")),
+        title: Some(message(b"Digital Zoom\0")),
+        description: Some(empty_message()),
+    },
+    TagInfo {
+        tag: 0x021d,
+        name: Some(message(b"LightSourceSpecial\0")),
+        title: Some(message(b"Light Source Special\0")),
+        description: Some(empty_message()),
+    },
+    TagInfo {
+        tag: 0x021e,
+        name: Some(message(b"Resaved\0")),
+        title: Some(message(b"Resaved\0")),
+        description: Some(empty_message()),
+    },
+    TagInfo {
+        tag: 0x021a,
+        name: Some(message(b"CCDSensitivity\0")),
+        title: Some(message(b"CCD Sensitivity\0")),
+        description: Some(empty_message()),
+    },
+    TagInfo {
+        tag: 0x021f,
+        name: Some(message(b"SceneSelect\0")),
+        title: Some(message(b"Scene Select\0")),
+        description: Some(empty_message()),
+    },
+    TagInfo {
+        tag: 0x0223,
+        name: Some(message(b"ManualFocusDistance\0")),
+        title: Some(message(b"Manual Focus Distance\0")),
+        description: Some(empty_message()),
+    },
+    TagInfo {
+        tag: 0x0224,
+        name: Some(message(b"SequenceShotInterval\0")),
+        title: Some(message(b"Sequence Shot Interval\0")),
+        description: Some(empty_message()),
+    },
+    TagInfo {
+        tag: 0x020b,
+        name: Some(message(b"EpsonImageWidth\0")),
+        title: Some(message(b"Epson Image Width\0")),
+        description: Some(empty_message()),
+    },
+    TagInfo {
+        tag: 0x020c,
+        name: Some(message(b"EpsonImageHeight\0")),
+        title: Some(message(b"Epson Image Height\0")),
+        description: Some(empty_message()),
+    },
+    TagInfo {
+        tag: 0x020d,
+        name: Some(message(b"EpsonSoftware\0")),
+        title: Some(message(b"Epson Software Version\0")),
+        description: Some(empty_message()),
+    },
+];
+
+fn olympus_tag_name_impl(tag: MnoteOlympusTag) -> *const c_char {
+    tag_name_from_table(OLYMPUS_TAGS, tag)
 }
 
-fn olympus_tag_title_impl(tag: MnoteOlympusTag) -> Option<&'static [u8]> {
-    match tag {
-        MNOTE_NIKON_TAG_FIRMWARE => Some(b"Firmware Version\0"),
-        MNOTE_NIKON_TAG_ISO => Some(b"ISO Setting\0"),
-        MNOTE_NIKON_TAG_COLORMODE1 => Some(b"Color Mode (?)\0"),
-        MNOTE_NIKON_TAG_QUALITY => Some(b"Quality\0"),
-        MNOTE_NIKON_TAG_WHITEBALANCE => Some(b"White Balance\0"),
-        MNOTE_NIKON_TAG_SHARPENING => Some(b"Image Sharpening\0"),
-        MNOTE_NIKON_TAG_FOCUSMODE => Some(b"Focus Mode\0"),
-        MNOTE_NIKON_TAG_FLASHSETTING => Some(b"Flash Setting\0"),
-        MNOTE_NIKON_TAG_FLASHMODE => Some(b"Flash Mode\0"),
-        MNOTE_NIKON_TAG_WHITEBALANCEFINE => Some(b"White Balance Fine Adjustment\0"),
-        MNOTE_NIKON_TAG_ISOSELECTION => Some(b"ISO Selection\0"),
-        MNOTE_NIKON_TAG_PREVIEWIMAGE => Some(b"Preview Image IFD\0"),
-        MNOTE_NIKON_TAG_FACEDETECT => Some(b"Face Detect\0"),
-        MNOTE_NIKON_TAG_IMAGEADJUSTMENT => Some(b"Image Adjustment\0"),
-        MNOTE_NIKON_TAG_MANUALFOCUSDISTANCE => Some(b"Manual Focus Distance\0"),
-        MNOTE_NIKON_TAG_DIGITALZOOM => Some(b"Digital Zoom\0"),
-        MNOTE_NIKON_TAG_AFFOCUSPOSITION => Some(b"AF Focus Position\0"),
-        MNOTE_NIKON_TAG_SHOTINFO => Some(b"Shot Info\0"),
-        MNOTE_NIKON_TAG_SATURATION => Some(b"Saturation\0"),
-        MNOTE_NIKON_TAG_NOISEREDUCTION => Some(b"Noise Reduction\0"),
-        MNOTE_NIKON_TAG_RETOUCHHISTORY => Some(b"Retouch History\0"),
-        MNOTE_OLYMPUS_TAG_THUMBNAILIMAGE => Some(b"Thumbnail Image\0"),
-        MNOTE_OLYMPUS_TAG_MODE => Some(b"Speed/Sequence/Panorama Direction\0"),
-        MNOTE_OLYMPUS_TAG_QUALITY => Some(b"Quality\0"),
-        MNOTE_OLYMPUS_TAG_MACRO => Some(b"Macro\0"),
-        MNOTE_OLYMPUS_TAG_BWMODE => Some(b"Black & White Mode\0"),
-        MNOTE_OLYMPUS_TAG_DIGIZOOM => Some(b"Digital Zoom\0"),
-        MNOTE_OLYMPUS_TAG_FOCALPLANEDIAGONAL => Some(b"Focal Plane Diagonal\0"),
-        MNOTE_OLYMPUS_TAG_LENSDISTORTION => Some(b"Lens Distortion Parameters\0"),
-        MNOTE_OLYMPUS_TAG_VERSION => Some(b"Firmware Version\0"),
-        MNOTE_OLYMPUS_TAG_INFO => Some(b"Info\0"),
-        MNOTE_OLYMPUS_TAG_ID => Some(b"Camera ID\0"),
-        MNOTE_OLYMPUS_TAG_DATADUMP => Some(b"Data Dump\0"),
-        MNOTE_SANYO_TAG_SEQUENTIALSHOT => Some(b"Sequential Shot\0"),
-        MNOTE_SANYO_TAG_WIDERANGE => Some(b"Wide Range\0"),
-        MNOTE_SANYO_TAG_COLORADJUSTMENTMODE => Some(b"Color Adjustment Mode\0"),
-        MNOTE_SANYO_TAG_FOCUSMODE => Some(b"Focus Mode\0"),
-        MNOTE_SANYO_TAG_QUICKSHOT => Some(b"Quick Shot\0"),
-        MNOTE_SANYO_TAG_SELFTIMER => Some(b"Self-timer\0"),
-        MNOTE_SANYO_TAG_VOICEMEMO => Some(b"Voice Memo\0"),
-        MNOTE_SANYO_TAG_RECORDSHUTTERRELEASE => Some(b"Record Shutter Release\0"),
-        MNOTE_SANYO_TAG_FLICKERREDUCE => Some(b"Flicker Reduce\0"),
-        MNOTE_SANYO_TAG_OPTICALZOOM => Some(b"Optical Zoom\0"),
-        MNOTE_SANYO_TAG_CCDSENSITIVITY => Some(b"CCD Sensitivity\0"),
-        MNOTE_SANYO_TAG_DIGITALZOOM => Some(b"Digital Zoom\0"),
-        MNOTE_SANYO_TAG_LIGHTSOURCESPECIAL => Some(b"Light Source Special\0"),
-        MNOTE_SANYO_TAG_RESAVED => Some(b"Resaved\0"),
-        MNOTE_SANYO_TAG_SCENESELECT => Some(b"Scene Select\0"),
-        MNOTE_SANYO_TAG_MANUALFOCUSDISTANCE => Some(b"Manual Focus Distance\0"),
-        MNOTE_SANYO_TAG_SEQUENCESHOTINTERVAL => Some(b"Sequence Shot Interval\0"),
-        MNOTE_OLYMPUS_TAG_FLASHMODE => Some(b"Flash Mode\0"),
-        MNOTE_OLYMPUS_TAG_FLASHDEVICE => Some(b"Flash Device\0"),
-        MNOTE_OLYMPUS_TAG_FOCUSDIST => Some(b"Manual Focus Distance\0"),
-        MNOTE_OLYMPUS_TAG_WBALANCE => Some(b"White Balance Setting\0"),
-        MNOTE_OLYMPUS_TAG_REDBALANCE => Some(b"Red Balance\0"),
-        MNOTE_OLYMPUS_TAG_BLUEBALANCE => Some(b"Blue Balance\0"),
-        MNOTE_OLYMPUS_TAG_BLACKLEVEL => Some(b"Black Level\0"),
-        MNOTE_OLYMPUS_TAG_COLORMATRIX => Some(b"Color Matrix\0"),
-        MNOTE_OLYMPUS_TAG_PREVIEWIMAGEVALID => Some(b"Preview Image Valid\0"),
-        MNOTE_OLYMPUS_TAG_NOISEREDUCTION => Some(b"Noise Reduction\0"),
-        _ => None,
-    }
+fn olympus_tag_title_impl(tag: MnoteOlympusTag) -> *const c_char {
+    tag_title_from_table(OLYMPUS_TAGS, tag)
+}
+
+fn olympus_tag_description_impl(tag: MnoteOlympusTag) -> *const c_char {
+    tag_description_from_table(OLYMPUS_TAGS, tag)
 }
 
 unsafe fn log_simple(note: *mut ExifMnoteDataOlympus, code: ExifLogCode, format: &[u8]) {
@@ -1172,7 +2145,7 @@ unsafe extern "C" fn exif_mnote_data_olympus_get_name(
         return ptr::null();
     }
     let tag = unsafe { (*(*note).entries.add(index as usize)).tag };
-    olympus_tag_name_impl(tag).map_or(ptr::null(), |name| name.as_ptr().cast())
+    olympus_tag_name_impl(tag)
 }
 
 unsafe extern "C" fn exif_mnote_data_olympus_get_title(
@@ -1184,7 +2157,7 @@ unsafe extern "C" fn exif_mnote_data_olympus_get_title(
         return ptr::null();
     }
     let tag = unsafe { (*(*note).entries.add(index as usize)).tag };
-    olympus_tag_title_impl(tag).map_or(ptr::null(), |title| title.as_ptr().cast())
+    olympus_tag_title_impl(tag)
 }
 
 unsafe extern "C" fn exif_mnote_data_olympus_get_description(
@@ -1195,7 +2168,8 @@ unsafe extern "C" fn exif_mnote_data_olympus_get_description(
     if note.is_null() || unsafe { index >= (*note).count } {
         ptr::null()
     } else {
-        b"\0".as_ptr().cast()
+        let tag = unsafe { (*(*note).entries.add(index as usize)).tag };
+        olympus_tag_description_impl(tag)
     }
 }
 
@@ -2095,25 +3069,15 @@ pub unsafe extern "C" fn mnote_olympus_entry_get_value(
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn mnote_olympus_tag_get_description(tag: MnoteOlympusTag) -> *const c_char {
-    panic_boundary::call_or(ptr::null(), || {
-        if olympus_tag_name_impl(tag).is_some() {
-            b"\0".as_ptr().cast()
-        } else {
-            ptr::null()
-        }
-    })
+    panic_boundary::call_or(ptr::null(), || olympus_tag_description_impl(tag))
 }
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn mnote_olympus_tag_get_name(tag: MnoteOlympusTag) -> *const c_char {
-    panic_boundary::call_or(ptr::null(), || {
-        olympus_tag_name_impl(tag).map_or(ptr::null(), |name| name.as_ptr().cast())
-    })
+    panic_boundary::call_or(ptr::null(), || olympus_tag_name_impl(tag))
 }
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn mnote_olympus_tag_get_title(tag: MnoteOlympusTag) -> *const c_char {
-    panic_boundary::call_or(ptr::null(), || {
-        olympus_tag_title_impl(tag).map_or(ptr::null(), |title| title.as_ptr().cast())
-    })
+    panic_boundary::call_or(ptr::null(), || olympus_tag_title_impl(tag))
 }
