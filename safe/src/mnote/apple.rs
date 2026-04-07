@@ -216,7 +216,12 @@ unsafe extern "C" fn exif_mnote_data_apple_load(
         return;
     }
 
-    unsafe { (*note).entries = entries };
+    unsafe {
+        if entry_size != 0 {
+            ptr::write_bytes(entries.cast::<u8>(), 0, entry_size);
+        }
+        (*note).entries = entries;
+    }
 
     for index in 0..tag_count {
         if offset.saturating_add(12) > buffer_size {
