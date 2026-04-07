@@ -10,12 +10,14 @@ phases:
       
       Repository Root: `/home/yans/code/safelibs/ported/libexif`
       
+      Consume or update the listed existing artifacts in place. Do not refetch, recollect, rediscover, or regenerate them from scratch.
+      
       Preexisting Inputs
       - `original/libexif/Makefile.am`
       - `original/configure.ac`
       - `original/libexif/libexif.sym`
-      - `original/libexif/exif-tag.c`
       - `original/debian/libexif12.symbols`
+      - `original/libexif/exif-tag.c`
       - `safe/Cargo.toml`
       - `safe/Cargo.lock`
       - `safe/COPYING`
@@ -23,28 +25,25 @@ phases:
       - `safe/NEWS`
       - `safe/SECURITY.md`
       - `safe/build.rs`
-      - `safe/cshim/`
-      - `safe/src/ffi/`
+      - `safe/cshim/**`
+      - `safe/src/ffi/{types.rs,panic_boundary.rs}`
       - `safe/src/lib.rs`
-      - `safe/src/primitives/`
-      - `safe/src/runtime/`
-      - `safe/src/object/`
-      - `safe/src/parser/`
-      - `safe/src/tables/`
-      - `safe/src/mnote/`
-      - `safe/include/libexif/`
+      - `safe/src/primitives/{byte_order.rs,format.rs,ifd.rs,utils.rs}`
+      - `safe/src/runtime/{log.rs,mem.rs}`
+      - `safe/src/object/{content.rs,data.rs,entry.rs}`
+      - `safe/src/parser/{data_load.rs,data_save.rs,loader.rs}`
+      - `safe/src/tables/{data_options.rs,tag_table.rs}`
+      - `safe/src/mnote/{mod.rs,base.rs,apple.rs,canon.rs,fuji.rs,olympus.rs,pentax.rs}`
+      - `safe/include/**`
       - `safe/libexif.pc.in`
       - `safe/libexif-uninstalled.pc.in`
-      - `safe/debian/`
-      - `safe/po/`
-      - `safe/contrib/examples/`
-      - `safe/doc/libexif-api.html/`
+      - `safe/debian/**`
+      - `safe/po/*.po`
+      - `safe/po/*.gmo`
+      - `safe/contrib/examples/**`
+      - `safe/doc/libexif-api.html/**`
       - `safe/tests/abi_layout.rs`
-      - `safe/tests/run-package-build.sh`
-      - `safe/tests/run-export-compare.sh`
-      - `safe/tests/run-c-compile-smoke.sh`
-      - `safe/tests/run-original-object-link-compat.sh`
-      - `safe/tests/run-performance-compare.sh`
+      - `safe/tests/{run-package-build.sh,run-export-compare.sh,run-c-compile-smoke.sh,run-original-object-link-compat.sh,run-performance-compare.sh}`
       
       New Outputs
       - Updated Rust ABI/export implementation in `safe/src/ffi/{types.rs,panic_boundary.rs}`, `safe/src/lib.rs`, and the owning exported modules under `safe/src/{primitives,runtime,object,parser,tables,mnote}/` when `abi_layout`, export comparison, or C compile smoke exposes a layout or symbol mismatch
@@ -73,27 +72,30 @@ phases:
       - `safe/tests/{abi_layout.rs,run-package-build.sh,run-export-compare.sh,run-c-compile-smoke.sh,run-original-object-link-compat.sh,run-performance-compare.sh}`
       
       Implementation Details
-      - Consume or update the listed artifacts in place. Do not refetch, recollect, rediscover, or regenerate them from scratch.
       - Preserve the existing ABI mirror strategy in `safe/src/ffi/types.rs`; fix layout or naming drift only if `abi_layout` or export checks prove a mismatch.
       - Handle public ABI and export-surface fixes in this phase. If `cargo test --release --test abi_layout` fails, update `safe/src/ffi/{types.rs,panic_boundary.rs}`. If `run-export-compare.sh` or `run-c-compile-smoke.sh` reveals missing, extra, or mis-exported public symbols, fix the owning Rust module and any `safe/src/lib.rs` export glue here instead of deferring the change.
       - Preserve the original header install set from `original/libexif/Makefile.am`. Do not replace copied headers with generated Rust output.
       - Preserve the original symbol or version contract from `original/libexif/libexif.sym` and `original/debian/libexif12.symbols`. If a symbol mismatch is found, fix the Rust export surface or packaging; do not silently edit the manifest unless the original manifest itself is provably wrong for this workspace.
       - Preserve Debian package ownership and install paths: runtime library under `libexif12`, headers, pkg-config data, and static archive under `libexif-dev`, docs, examples, and doc-base metadata under `libexif-doc` with files still living under `/usr/share/doc/libexif-dev/`.
-      - Consume the existing API docs tree in place. Do not regenerate `safe/doc/libexif-api.html/` while it already exists; package and validate the checked-in tree.
       - Keep the real shared object file `libexif.so.12.3.4` plus direct `libexif.so.12` and `libexif.so` symlinks.
       - Make `safe/tests/run-package-build.sh` idempotent for a populated `PACKAGE_BUILD_ROOT`. It must record `metadata/source-commit.txt`, `metadata/package-inputs.sha256`, and `metadata/validated.ok`, it must expose `--print-package-inputs-manifest` for non-mutating checker diffs, and it may reuse an existing root only when those files still match the current workspace and the extracted package validation checks still pass.
-      - `safe/tests/run-package-build.sh` must store `metadata/package-inputs.sha256` as the exact sorted `sha256sum`-style manifest, with one `<sha256><two spaces><repo-relative-path>` line per input file, over every package-affecting file: `safe/{Cargo.toml,Cargo.lock,build.rs,COPYING,README,NEWS,SECURITY.md,libexif.pc.in,libexif-uninstalled.pc.in}`, `safe/src/**`, `safe/cshim/**`, `safe/include/**`, `safe/debian/**`, `safe/po/**`, `safe/contrib/examples/**`, `safe/doc/libexif-api.html/**`, `safe/tests/run-package-build.sh`, and any `original/**` file still consumed by the safe build such as `original/libexif/libexif.sym` and `original/libexif/exif-tag.c`.
+      - `metadata/package-inputs.sha256` must be the exact sorted `sha256sum`-style manifest emitted by `bash tests/run-package-build.sh --print-package-inputs-manifest`, with one `<sha256><two spaces><repo-relative-path>` line per input file.
+      - That manifest must cover every package-affecting file still consumed by the safe build: `safe/{Cargo.toml,Cargo.lock,build.rs,COPYING,README,NEWS,SECURITY.md,libexif.pc.in,libexif-uninstalled.pc.in}`, `safe/src/**`, `safe/cshim/**`, `safe/include/**`, `safe/debian/**`, `safe/po/**`, `safe/contrib/examples/**`, `safe/doc/libexif-api.html/**`, `safe/tests/run-package-build.sh`, and any `original/**` file still consumed by the build such as `original/libexif/libexif.sym` and `original/libexif/exif-tag.c`.
+      - Preserve the consume-existing-artifacts contract for copied headers, docs, examples, and locales. When `safe/po/*.po`, `safe/po/*.gmo`, `safe/contrib/examples/**`, or `safe/doc/libexif-api.html/**` already exist, keep them as in-place package inputs rather than rediscovering or regenerating replacements.
       - `safe/tests/run-package-build.sh` validation must explicitly include `libexif-dev/usr/lib/$multiarch/libexif.a` and `root/usr/lib/$multiarch/libexif.a`. Do not treat the static archive as implied by the `.deb` build alone.
       - `safe/tests/run-c-compile-smoke.sh` must prove both shared-link and static-link compatibility from the packaged root. At least one smoke target must be forced to link against the packaged `libexif.a`, and the resulting binary must be written to `safe/.artifacts/<implement-phase-id>/compile-smoke/static/public-api-smoke-static`, must execute successfully, and must have no `NEEDED` entry for `libexif.so.12` in `readelf -d` output.
       - If the metadata or extracted-package validation no longer matches, `safe/tests/run-package-build.sh` must rebuild that root in place before any wrapper continues. If `LIBEXIF_REQUIRE_REUSE=1` is set, it must fail instead of rebuilding. This invalidation behavior is part of this phase.
       - When `LIBEXIF_REQUIRE_REUSE=1` blocks a missing or stale phase-local package root, `safe/tests/run-package-build.sh` must emit the exact substring `reuse-required package root is missing or stale`. Package-backed wrappers that delegate to it must preserve that substring so verifiers can assert the contract without inferring why the command failed.
       - `safe/tests/run-export-compare.sh`, `safe/tests/run-c-compile-smoke.sh`, `safe/tests/run-original-object-link-compat.sh`, and `safe/tests/run-performance-compare.sh` must preserve inherited `LIBEXIF_REQUIRE_REUSE=1` so later verifiers can prove wrapper-level reuse instead of a silent nested rebuild through `run-package-build.sh`. This phase covers missing-root and stale-root negative coverage for `run-export-compare.sh`.
+      - Later phases may not overwrite or repurpose an earlier phase's package root. A later phase that changes code may create its own new phase-local package root for its own phase, but it must still reuse that root for all remaining package-backed commands in that phase.
       - Treat serial execution as part of the implementation. If a failure only reproduces under concurrent package builds, fix the workflow or harness ordering rather than adding retry loops.
+      - Commit requirement: commit phase changes to git before yielding.
       
       Success Criteria
       - `cargo test --release --test abi_layout`
       - `PACKAGE_BUILD_ROOT=/home/yans/code/safelibs/ported/libexif/safe/.artifacts/impl_01_abi_packaging bash tests/run-package-build.sh`
       - `bash tests/run-package-build.sh --print-package-inputs-manifest` must diff cleanly against `/home/yans/code/safelibs/ported/libexif/safe/.artifacts/impl_01_abi_packaging/metadata/package-inputs.sha256`
+      - `/home/yans/code/safelibs/ported/libexif/safe/.artifacts/impl_01_abi_packaging/metadata/package-inputs.sha256` must remain the exact sorted `sha256sum`-style manifest over the required package-affecting inputs, including `safe/po/**`, `safe/contrib/examples/**`, `safe/doc/libexif-api.html/**`, and any consumed `original/**` build inputs
       - `test -f /home/yans/code/safelibs/ported/libexif/safe/.artifacts/impl_01_abi_packaging/libexif-dev/usr/lib/$(dpkg-architecture -qDEB_HOST_MULTIARCH)/libexif.a`
       - `LIBEXIF_REQUIRE_REUSE=1 PACKAGE_BUILD_ROOT=/home/yans/code/safelibs/ported/libexif/safe/.artifacts/impl_01_abi_packaging bash tests/run-export-compare.sh`
       - `LIBEXIF_REQUIRE_REUSE=1 PACKAGE_BUILD_ROOT=/home/yans/code/safelibs/ported/libexif/safe/.artifacts/impl_01_abi_packaging bash tests/run-c-compile-smoke.sh`
@@ -103,7 +105,7 @@ phases:
       - A copied stale root made from `/home/yans/code/safelibs/ported/libexif/safe/.artifacts/impl_01_abi_packaging` with mismatched `metadata/source-commit.txt` must cause `LIBEXIF_REQUIRE_REUSE=1 PACKAGE_BUILD_ROOT=<stale-copy> bash tests/run-export-compare.sh` to fail with `reuse-required package root is missing or stale`
       
       Git Commit Requirement
-      - Commit the phase work to git before yielding. Do not yield with uncommitted changes.
+      The implementer must commit work to git before yielding.
   - id: check_01_abi_tester
     type: check
     bounce_target: impl_01_abi_packaging
@@ -213,30 +215,27 @@ phases:
       
       Repository Root: `/home/yans/code/safelibs/ported/libexif`
       
+      Consume or update the listed existing artifacts in place. Do not refetch, recollect, rediscover, or regenerate them from scratch.
+      
       Preexisting Inputs
       - `safe/build.rs`
       - `safe/src/lib.rs`
       - `safe/src/ffi/types.rs`
       - `safe/src/i18n.rs`
-      - `safe/src/primitives/`
-      - `safe/src/runtime/`
-      - `safe/src/object/`
-      - `safe/src/parser/`
-      - `safe/src/tables/`
-      - `safe/src/mnote/`
-      - `safe/tests/primitives_tables.rs`
-      - `safe/tests/object_model.rs`
-      - `safe/tests/cve_regressions.rs`
-      - `safe/tests/ported_c.rs`
-      - `safe/tests/run-original-test-suite.sh`
-      - `safe/tests/run-c-test.sh`
-      - `safe/tests/run-original-shell-test.sh`
-      - `safe/tests/run-original-nls-test.sh`
-      - `safe/tests/run-test-mnote-matrix.sh`
-      - `safe/tests/original-c/`
-      - `safe/tests/original-sh/`
-      - `safe/tests/support/`
-      - `safe/tests/testdata/`
+      - `safe/po/*.po`
+      - `safe/po/*.gmo`
+      - `safe/src/primitives/*`
+      - `safe/src/runtime/*`
+      - `safe/src/object/*`
+      - `safe/src/parser/*`
+      - `safe/src/tables/*`
+      - `safe/src/mnote/*`
+      - `safe/tests/{primitives_tables.rs,object_model.rs,cve_regressions.rs,ported_c.rs,run-original-test-suite.sh,run-c-test.sh,run-original-shell-test.sh,run-original-nls-test.sh,run-test-mnote-matrix.sh}`
+      - `safe/tests/original-c/**`
+      - `safe/tests/original-sh/**`
+      - `safe/tests/support/**`
+      - `safe/tests/testdata/*.jpg`
+      - `safe/tests/testdata/*.parsed`
       - `original/libexif/exif-tag.c`
       - `relevant_cves.json`
       - `safe/tests/cve-regressions-manifest.txt`
@@ -262,17 +261,17 @@ phases:
       - `safe/tests/support/**`
       
       Implementation Details
-      - Consume or update the listed artifacts in place. Do not refetch, recollect, rediscover, or regenerate them from scratch.
       - Preserve the ABI-visible public-struct semantics. C callers are still allowed to observe and mutate fields such as `ExifData::ifd`, `ExifData::data`, `ExifContent::entries`, `ExifEntry::data`, and `ExifEntry::parent`.
       - Use the existing regression harnesses as the driver for fixes: null handling, default-tag insertion, byte-order conversion, `exif_loader_get_buf`, `exif_data_fix`, `exif_content_fix`, `exif_entry_get_value`, parse or save symmetry, table-string behavior, tag-table ordering or lookup, current helper-backed MakerNote behavior exercised by `run-original-test-suite.sh`, NLS or localedir behavior, and shell-script compatibility.
       - Handle any compatibility failure exposed by `bash tests/run-original-test-suite.sh` in this phase. Do not defer such failures to phase 3 just because the exercised path touches `safe/src/mnote/*`; phase 3 is reserved for removing vendor-helper C and making those MakerNote paths Rust-owned after they are behaviorally correct.
       - If the copied-suite failure comes from generated tag metadata or gettext or localedir wiring, fix the extractor or env propagation in `safe/build.rs` and keep the resulting behavior covered by `primitives_tables`, `test-tagtable`, or the NLS runner rather than inventing a separate phase.
       - Preserve checked arithmetic and parser budgets in `safe/src/parser/limits.rs`; expand them only when a legitimate compatibility case requires it and a regression test proves the new bound.
-      - Preserve parser tests that require explicit fixtures. Keep the existing explicit fixture argv and `TEST_IMAGES` contracts in the copied parser runners instead of weakening them into rediscovery or implicit fixture enumeration.
+      - Preserve parser-fixture contracts exactly. Parser tests that currently rely on explicit fixture argv or `TEST_IMAGES` must keep those explicit inputs instead of being loosened into rediscovery, directory scans, or regenerated fixture selection.
       - When a bug is found via an upstream-style C test or shell script, add or tighten the smallest possible regression under `safe/tests/` so the issue becomes locally reproducible without depending solely on the full suite.
-      - Keep the locale-pinned environment in every runner that compares safe and original behavior.
+      - Checks that compare safe and original behavior must keep `LC_ALL=C`, `LANG=`, and `LANGUAGE=` pinned exactly as the existing scripts do.
       - Preserve the copied shell and NLS fixtures in place. Update nested `safe/tests/original-c/**` or `safe/tests/original-sh/**` only when that preserves the original test intent rather than papering over a library bug.
       - Prefer safe helper functions over widening raw-pointer manipulation or adding new `unsafe`.
+      - Commit requirement: commit phase changes to git before yielding.
       
       Success Criteria
       - `cargo test --release --test primitives_tables`
@@ -281,7 +280,7 @@ phases:
       - `bash tests/run-original-test-suite.sh`
       
       Git Commit Requirement
-      - Commit the phase work to git before yielding. Do not yield with uncommitted changes.
+      The implementer must commit work to git before yielding.
   - id: check_02_core_tester
     type: check
     bounce_target: impl_02_core_behavior
@@ -319,7 +318,7 @@ phases:
       Review the current workspace for check phase `check_02_core_senior`. Do not modify files.
       
       Specific Things to Verify
-      - review fixes for parser, table, i18n, helper-backed MakerNote, and object correctness, ensure each failure has a minimal regression, and confirm the locale-pinned original-suite contract stayed intact.
+      - review fixes for parser, table, i18n, helper-backed MakerNote, and object correctness, ensure each failure has a minimal regression, and confirm that checks comparing safe and original behavior still keep `LC_ALL=C`, `LANG=`, and `LANGUAGE=` pinned exactly as the existing scripts do.
       - Run the exact commands below as written. Treat every embedded diff, grep, exact-string, row-count, and file-existence assertion as mandatory when present.
       
       Commands to Run
@@ -340,22 +339,17 @@ phases:
       
       Repository Root: `/home/yans/code/safelibs/ported/libexif`
       
+      Consume or update the listed existing artifacts in place. Do not refetch, recollect, rediscover, or regenerate them from scratch.
+      
       Preexisting Inputs
       - `safe/build.rs`
       - `safe/cshim/exif-log-shim.c`
-      - `safe/src/mnote/`
-      - `original/libexif/apple/`
-      - `original/libexif/canon/`
-      - `original/libexif/fuji/`
-      - `original/libexif/olympus/`
-      - `original/libexif/pentax/`
+      - `safe/src/mnote/{mod.rs,base.rs,apple.rs,canon.rs,fuji.rs,olympus.rs,pentax.rs}`
+      - `original/libexif/{apple,canon,fuji,olympus,pentax}/*`
       - `safe/tests/run-original-test-suite.sh`
       - `safe/tests/run-test-mnote-matrix.sh`
-      - `safe/tests/original-c/test-apple-mnote.c`
-      - `safe/tests/original-c/test-fuzzer.c`
-      - `safe/tests/original-c/test-fuzzer-persistent.c`
-      - `safe/tests/original-c/test-mnote.c`
-      - `safe/tests/testdata/`
+      - `safe/tests/original-c/{test-apple-mnote.c,test-fuzzer.c,test-fuzzer-persistent.c,test-mnote.c}`
+      - `safe/tests/testdata/*`
       - `safe/tests/cve_regressions.rs`
       
       New Outputs
@@ -375,7 +369,6 @@ phases:
       - `test-original.sh` only if its usage or staging comments must describe a narrower remaining `original/` dependency
       
       Implementation Details
-      - Consume or update the listed artifacts in place. Do not refetch, recollect, rediscover, or regenerate them from scratch.
       - Port the remaining vendor-specific MakerNote identification, load or save, enumeration, and formatting logic from the vendored C helper sources into Rust.
       - Replace the concrete helper seams already visible in the current tree: `safe/src/mnote/apple.rs` and `safe/src/mnote/fuji.rs` are thin helper trampolines only, while `safe/src/mnote/canon.rs`, `safe/src/mnote/olympus.rs`, and `safe/src/mnote/pentax.rs` expose public ABI entry points that still call `safe_helper_*` foreign functions. Phase 3 removes those helper dependencies while keeping the Canon, Olympus, and Pentax exported symbol surface unchanged.
       - Preserve the exported ABI and visible behavior of `exif_mnote_data_canon_new`, `exif_mnote_data_olympus_new`, `exif_mnote_data_pentax_new`, `mnote_canon_entry_get_value`, `mnote_olympus_entry_get_value`, `mnote_pentax_entry_get_value`, and the associated tag metadata functions.
@@ -388,6 +381,7 @@ phases:
       - If phase 3 narrows the reason `test-original.sh` stages `original/`, update its usage or help text to describe the remaining dependency accurately rather than deleting the staging step prematurely.
       - Preserve existing CVE protections such as Olympus zero-denominator formatting and Canon size limits while moving the implementation into Rust.
       - Add focused regressions for any newly ported MakerNote path that previously relied only on the helper C code.
+      - Commit requirement: commit phase changes to git before yielding.
       
       Success Criteria
       - `bash tests/run-original-test-suite.sh`
@@ -401,7 +395,7 @@ phases:
       - `! rg -n 'compile_mnote_helper|build_mnote_helpers|emit_mnote_rerun_hints|safe_helper_exif_mnote_data_|safe_helper_mnote_' build.rs src/mnote`
       
       Git Commit Requirement
-      - Commit the phase work to git before yielding. Do not yield with uncommitted changes.
+      The implementer must commit work to git before yielding.
   - id: check_03_mnote_tester
     type: check
     bounce_target: impl_03_makernote_rust_completion
@@ -472,15 +466,15 @@ phases:
       
       Repository Root: `/home/yans/code/safelibs/ported/libexif`
       
+      Consume or update the listed existing artifacts in place. Do not refetch, recollect, rediscover, or regenerate them from scratch.
+      
       Preexisting Inputs
       - `safe/tests/run-package-build.sh`
       - `safe/tests/run-c-compile-smoke.sh`
       - `safe/tests/run-original-object-link-compat.sh`
       - `safe/tests/link-compat/object-manifest.txt`
       - `safe/tests/link-compat/run-manifest.txt`
-      - `original/test/*.o` when present
-      - `original/contrib/examples/*.o` when present
-      - `original/test/nls/print-localedir.o` when present
+      - `original/test/*.o`, `original/contrib/examples/*.o`, and `original/test/nls/print-localedir.o` when present
       - `original/test/Makefile.am`
       - `original/contrib/examples/Makefile.am`
       - `safe/contrib/examples/*.c`
@@ -501,7 +495,6 @@ phases:
       - `safe/src/**` only as required by compatibility failures
       
       Implementation Details
-      - Consume or update the listed artifacts in place. Do not refetch, recollect, rediscover, or regenerate them from scratch.
       - Consume the existing object manifests. Do not weaken this phase into source-only recompilation.
       - If original object or wrapper artifacts are missing, regenerate them only via the existing `original/` build targets that the current harness already uses.
       - Reuse the fixed phase-local package root for every package-backed command in this phase. Do not create a new temp package build for each wrapper script.
@@ -511,6 +504,7 @@ phases:
         - `normalize_hex_pointers_in_streams` only for known pointer-printing cases such as `test-fuzzer`
       - Preserve byte-for-byte output-file comparison for `test-extract`, `thumbnail`, `write-exif`, and any new file-producing entry added later.
       - If a relink failure reveals an ABI-visible behavior discrepancy, add the smallest possible new manifest entry or local regression in addition to the library fix.
+      - Commit requirement: commit phase changes to git before yielding.
       
       Success Criteria
       - `PACKAGE_BUILD_ROOT=/home/yans/code/safelibs/ported/libexif/safe/.artifacts/impl_04_source_link_compat bash tests/run-package-build.sh`
@@ -521,7 +515,7 @@ phases:
       - `LIBEXIF_REQUIRE_REUSE=1 PACKAGE_BUILD_ROOT=/home/yans/code/safelibs/ported/libexif/safe/.artifacts/impl_04_source_link_compat.missing bash tests/run-original-object-link-compat.sh` must fail with `reuse-required package root is missing or stale`
       
       Git Commit Requirement
-      - Commit the phase work to git before yielding. Do not yield with uncommitted changes.
+      The implementer must commit work to git before yielding.
   - id: check_04_link_tester
     type: check
     bounce_target: impl_04_source_link_compat
@@ -604,10 +598,14 @@ phases:
       
       Repository Root: `/home/yans/code/safelibs/ported/libexif`
       
+      Consume or update the listed existing artifacts in place. Do not refetch, recollect, rediscover, or regenerate them from scratch.
+      
       Preexisting Inputs
       - `dependents.json`
       - `test-original.sh`
       - `safe/tests/run-package-build.sh`
+      - current Docker inline image definition embedded in `test-original.sh`
+      - current smaller compile probes for `libexif-gtk3`, `CamlImages`, and `ImageMagick`
       
       New Outputs
       - Phase-local package root `safe/.artifacts/impl_05_downstream_compile/` with fresh package metadata and validated overlay contents
@@ -628,10 +626,9 @@ phases:
       - `safe/src/**` as required by failures
       
       Implementation Details
-      - Consume or update the listed artifacts in place. Do not refetch, recollect, rediscover, or regenerate them from scratch.
       - Extend `test-original.sh` with `--mode compile`, `--mode runtime`, and `--mode all`; keep `all` as the default broadest end-to-end entry point.
-      - `--mode all` must run the complete compile matrix first and then the runtime matrix, reusing the same validated `LIBEXIF_DOWNSTREAM_PACKAGE_ROOT` and the same validated `LIBEXIF_ORIGINAL_TEST_IMAGE` within that invocation, and it must refresh both downstream summary files from that single run.
       - Preserve the exact downstream name contract in `test-original.sh`: `REQUIRED_DEPENDENTS` must stay synchronized with `dependents.json`, and `--only` must continue using those exact case-sensitive names.
+      - Preserve the existing downstream Docker harness in `test-original.sh`. Extend it in place; do not replace it with a separate workflow, external Dockerfile, or rediscovered app list.
       - `--mode compile` must cover all 15 downstream names in `dependents.json`. The inventory already records compile evidence via `dependency_paths`, but compile-mode membership is still the full fixed dependent-name list. It must not silently skip a dependent just because the existing script only had a runtime probe for it before, and it must not collapse shared source-package builds into fewer named results.
       - For each unique source package from the existing inventory, build the actual Ubuntu source package inside the Docker container using the already selected source-package identity from `dependents.json`: `apt-get build-dep -y --no-install-recommends <source_package>`, `apt-get source <source_package>`, and `DEB_BUILD_OPTIONS='nocheck noautodbgsym nostrip' dpkg-buildpackage -us -uc -b`.
       - The required source-package build coverage is: `exif`, `fbi`, `eog-plugins`, `tracker-miners`, `shotwell`, `foxtrotgps`, `gphoto2`, `gtkam`, `minidlna`, `gerbera`, `ruby-exif`, `libexif-gtk`, `camlimages`, and `imagemagick`.
@@ -641,20 +638,23 @@ phases:
       - `test-original.sh --mode compile --only <name>` must not overwrite or truncate an existing 15-row `downstream/compile-matrix.tsv`. If per-dependent logs or artifacts are useful for focused reruns, place them under a separate non-summary path such as `downstream/only/compile/<name>/`.
       - A full-matrix invocation of `test-original.sh --mode runtime` without `--only`, and the runtime half of `test-original.sh --mode all`, must refresh `LIBEXIF_DOWNSTREAM_PACKAGE_ROOT/downstream/runtime-matrix.tsv` with the exact header `name<TAB>source_package<TAB>assertion<TAB>artifact<TAB>status`, one row per runtime-capable dependent in the exact `jq -r '.dependents[] | select(.runtime_functionality != null) | .name' dependents.json` order, and `status=ok` for every successful row. The `assertion` field must describe the dependent-specific runtime probe, and the `artifact` field must identify the runtime log, inspected output, or generated file that satisfied that probe. Compile-only dependents must never appear in this file.
       - Treat `ImageMagick` as compile-only for mode membership because `dependents.json` records `"runtime_functionality": null`. Preserve the existing `identify -verbose` execution as `ImageMagick`'s compile-mode post-build assertion after the source package finishes building, but do not schedule `ImageMagick` inside runtime mode.
-      - The existing smaller compile probes for `libexif-gtk3`, `CamlImages`, and `ImageMagick` may remain as debugging loops, but they do not replace the full source-package build contract.
-      - `test-original.sh` must install prebuilt safe packages from `LIBEXIF_DOWNSTREAM_PACKAGE_ROOT`, must validate that root's `metadata/source-commit.txt`, `metadata/package-inputs.sha256`, and `metadata/validated.ok` against the current workspace before launching the container, must expose `--print-image-inputs-sha256`, and may reuse an existing `LIBEXIF_ORIGINAL_TEST_IMAGE` only when `docker image inspect` shows a recorded digest that still matches the current harness inputs. That image-freshness key must cover `test-original.sh`, `dependents.json`, and any checked-in `safe/tests/downstream/**` helper files used by the phase. It must not rebuild `safe/` inside the container once the phase-local package root exists.
-      - `LIBEXIF_DOWNSTREAM_PACKAGE_ROOT/downstream/` is reserved for host-visible downstream summaries and per-run logs. It is a downstream-harness output area, not part of `metadata/package-inputs.sha256` or the `validated.ok` package-content checks.
-      - After `test-original.sh` validates `LIBEXIF_DOWNSTREAM_PACKAGE_ROOT`, it must treat every path under that root except `downstream/` as read-only. If containerized probes need writable host-visible output, route that output through `downstream/` or another separate writable mount rather than making the validated package tree writable.
+      - The existing smaller compile probes for `libexif-gtk3`, `CamlImages`, and `ImageMagick` may remain as faster debugging loops, but they are supplemental. They do not replace the full source-package build contract.
+      - `--mode all` must run the complete compile matrix first and then the runtime matrix, reusing the same validated `LIBEXIF_DOWNSTREAM_PACKAGE_ROOT` and the same validated `LIBEXIF_ORIGINAL_TEST_IMAGE` within that invocation.
+      - `test-original.sh` must install prebuilt safe packages from `LIBEXIF_DOWNSTREAM_PACKAGE_ROOT`, must reject that package root if its freshness metadata does not match the current workspace, must expose `--print-image-inputs-sha256`, and must reuse the already-existing `LIBEXIF_ORIGINAL_TEST_IMAGE` tag only when its recorded image-input digest still matches the current harness inputs. It must not rebuild `safe/` inside the container once the phase-local package root exists.
+      - The image-input digest printed by `./test-original.sh --print-image-inputs-sha256` and stored on `libexif-original-test:impl_05_downstream_compile` must cover `test-original.sh`, `dependents.json`, and any checked-in `safe/tests/downstream/**` helpers used by this phase.
+      - `LIBEXIF_DOWNSTREAM_PACKAGE_ROOT/downstream/` is reserved for host-visible downstream summaries and per-run logs. Keep it outside `metadata/package-inputs.sha256` and `validated.ok`; only the validated package tree above `downstream/` participates in package-root freshness checks.
       - The downstream harness must keep `LIBEXIF_DOWNSTREAM_PACKAGE_ROOT` reusable after each compile-mode run. Summary or per-dependent log writes may happen only under `downstream/`; the validated package contents and metadata must remain untouched so `LIBEXIF_REQUIRE_REUSE=1 PACKAGE_BUILD_ROOT="$LIBEXIF_DOWNSTREAM_PACKAGE_ROOT" bash safe/tests/run-package-build.sh` still succeeds after `./test-original.sh --mode compile`.
+      - After `test-original.sh` validates `LIBEXIF_DOWNSTREAM_PACKAGE_ROOT`, treat every path under that root except `downstream/` as read-only. If containerized probes need writable host-visible output, route it through `downstream/` or another separate writable mount rather than mutating the validated package tree.
       - With `LIBEXIF_REQUIRE_REUSE=1`, `test-original.sh` must emit `reuse-required docker image is missing or stale` for a deliberately missing or stale `LIBEXIF_ORIGINAL_TEST_IMAGE`, and `reuse-required package root is missing or stale` for a deliberately missing or stale `LIBEXIF_DOWNSTREAM_PACKAGE_ROOT`.
       - Before any phase-5 checker invocation that uses `downstream/compile-matrix.tsv` as proof, delete that file from the phase-local root so the exact `./test-original.sh --mode compile` run must recreate it. A leftover 15-row summary from an earlier bounce is not acceptable evidence.
       - First delete any preexisting `downstream/compile-matrix.tsv`. Then `./test-original.sh --mode compile` may build the phase-local image if needed and must recreate the 15-row compile summary. Then `LIBEXIF_REQUIRE_REUSE=1 ./test-original.sh --mode compile --only exif` must succeed without rebuilding the image or repackaging `libexif-safe`, must leave the 15-row compile summary intact, and must leave the phase-local package root valid for `LIBEXIF_REQUIRE_REUSE=1 bash safe/tests/run-package-build.sh`. Deliberate missing-image, stale-image, missing-package-root, and stale-package-root reruns must fail with the exact reuse-only substrings above.
       - Use `./test-original.sh --mode compile --only <name>` as the tight failure reproduction loop for a single dependent.
       - For each consumer-visible failure, first reproduce it through the Docker harness, then create the smallest possible non-Docker regression under `safe/tests/` whenever feasible.
+      - Commit requirement: commit phase changes to git before yielding.
       
       Success Criteria
       - `PACKAGE_BUILD_ROOT=/home/yans/code/safelibs/ported/libexif/safe/.artifacts/impl_05_downstream_compile bash safe/tests/run-package-build.sh`
-      - `cd /home/yans/code/safelibs/ported/libexif && ./test-original.sh --print-image-inputs-sha256` must match `docker image inspect libexif-original-test:impl_05_downstream_compile --format '{% raw %}{{ index .Config.Labels "io.safelibs.libexif.image-inputs-sha256" }}{% endraw %}'`
+      - `cd /home/yans/code/safelibs/ported/libexif && ./test-original.sh --print-image-inputs-sha256` must match `docker image inspect libexif-original-test:impl_05_downstream_compile --format '{{ index .Config.Labels "io.safelibs.libexif.image-inputs-sha256" }}'`
       - `rm -f /home/yans/code/safelibs/ported/libexif/safe/.artifacts/impl_05_downstream_compile/downstream/compile-matrix.tsv && LIBEXIF_ORIGINAL_TEST_IMAGE=libexif-original-test:impl_05_downstream_compile LIBEXIF_DOWNSTREAM_PACKAGE_ROOT=/home/yans/code/safelibs/ported/libexif/safe/.artifacts/impl_05_downstream_compile ./test-original.sh --mode compile`
       - `/home/yans/code/safelibs/ported/libexif/safe/.artifacts/impl_05_downstream_compile/downstream/compile-matrix.tsv` must be recreated by that invocation with header `name<TAB>source_package<TAB>assertion<TAB>artifact<TAB>status`, its name column must diff cleanly against `jq -r '.dependents[].name' /home/yans/code/safelibs/ported/libexif/dependents.json`, and it must contain exactly 15 rows with `status=ok`
       - `LIBEXIF_REQUIRE_REUSE=1 LIBEXIF_ORIGINAL_TEST_IMAGE=libexif-original-test:impl_05_downstream_compile LIBEXIF_DOWNSTREAM_PACKAGE_ROOT=/home/yans/code/safelibs/ported/libexif/safe/.artifacts/impl_05_downstream_compile ./test-original.sh --mode compile --only exif`
@@ -664,7 +664,7 @@ phases:
       - A copied stale root made from `/home/yans/code/safelibs/ported/libexif/safe/.artifacts/impl_05_downstream_compile` with mismatched `metadata/source-commit.txt` must cause `LIBEXIF_REQUIRE_REUSE=1 LIBEXIF_ORIGINAL_TEST_IMAGE=libexif-original-test:impl_05_downstream_compile LIBEXIF_DOWNSTREAM_PACKAGE_ROOT=<stale-copy> ./test-original.sh --mode compile --only exif` to fail with `reuse-required package root is missing or stale`
       
       Git Commit Requirement
-      - Commit the phase work to git before yielding. Do not yield with uncommitted changes.
+      The implementer must commit work to git before yielding.
   - id: check_05_downstream_compile_tester
     type: check
     bounce_target: impl_05_downstream_compile
@@ -708,7 +708,7 @@ phases:
       awk -F'\t' 'NR > 1 { print $1 }' "$compile_summary" >"$actual_compile_names"
       diff -u "$expected_compile_names" "$actual_compile_names"
       test "$(awk -F'\t' 'NR > 1 && $5 == "ok" { count++ } END { print count + 0 }' "$compile_summary")" = "15"
-      test "$(docker image inspect "$LIBEXIF_ORIGINAL_TEST_IMAGE" --format '{% raw %}{{ index .Config.Labels "io.safelibs.libexif.image-inputs-sha256" }}{% endraw %}')" = "$expected_image_digest"
+      test "$(docker image inspect "$LIBEXIF_ORIGINAL_TEST_IMAGE" --format '{{ index .Config.Labels "io.safelibs.libexif.image-inputs-sha256" }}')" = "$expected_image_digest"
       LIBEXIF_REQUIRE_REUSE=1 ./test-original.sh --mode compile --only exif
       awk -F'\t' 'NR > 1 { print $1 }' "$compile_summary" >"$actual_compile_names"
       diff -u "$expected_compile_names" "$actual_compile_names"
@@ -783,7 +783,7 @@ phases:
       awk -F'\t' 'NR > 1 { print $1 }' "$compile_summary" >"$actual_compile_names"
       diff -u "$expected_compile_names" "$actual_compile_names"
       test "$(awk -F'\t' 'NR > 1 && $5 == "ok" { count++ } END { print count + 0 }' "$compile_summary")" = "15"
-      test "$(docker image inspect "$LIBEXIF_ORIGINAL_TEST_IMAGE" --format '{% raw %}{{ index .Config.Labels "io.safelibs.libexif.image-inputs-sha256" }}{% endraw %}')" = "$expected_image_digest"
+      test "$(docker image inspect "$LIBEXIF_ORIGINAL_TEST_IMAGE" --format '{{ index .Config.Labels "io.safelibs.libexif.image-inputs-sha256" }}')" = "$expected_image_digest"
       LIBEXIF_REQUIRE_REUSE=1 ./test-original.sh --mode compile --only exif
       awk -F'\t' 'NR > 1 { print $1 }' "$compile_summary" >"$actual_compile_names"
       diff -u "$expected_compile_names" "$actual_compile_names"
@@ -815,11 +815,17 @@ phases:
       
       Repository Root: `/home/yans/code/safelibs/ported/libexif`
       
+      Consume or update the listed existing artifacts in place. Do not refetch, recollect, rediscover, or regenerate them from scratch.
+      
       Preexisting Inputs
       - `dependents.json`
       - `test-original.sh`
-      - `safe/tests/`
-      - `safe/tests/testdata/`
+      - `safe/tests/testdata/*`
+      - `safe/tests/*.rs`
+      - `safe/tests/*.sh`
+      - `safe/tests/original-c/**`
+      - `safe/tests/original-sh/**`
+      - `safe/tests/support/**`
       - `safe/tests/run-package-build.sh`
       
       New Outputs
@@ -837,13 +843,13 @@ phases:
       - `safe/src/**` as required by failures
       
       Implementation Details
-      - Consume or update the listed artifacts in place. Do not refetch, recollect, rediscover, or regenerate them from scratch.
       - Use the existing 15-entry `dependents.json` inventory. Do not rediscover a new app list.
       - Use `./test-original.sh --mode runtime --only <name>` for tight failure reproduction loops.
       - Runtime mode in this phase must cover only dependents whose `runtime_functionality` is non-null. `ImageMagick` is therefore intentionally excluded here and remains compile-mode-only; `./test-original.sh --mode runtime --only ImageMagick` must fail fast with the exact substring `compile-only dependent: ImageMagick only supports --mode compile` instead of being treated as a runtime probe.
       - Reuse the phase-local package root and phase-local Docker image tag for every `--only` invocation in this phase. Run one initial runtime invocation without `LIBEXIF_REQUIRE_REUSE`, then reuse-only reruns for the remaining apps and the compile-only negative case. Do not rebuild safe packages or the image once the phase-local artifacts exist.
       - Keep fixture generation inside `test-original.sh` as the source of truth for synthetic images; extend it in place only when a real app scenario needs a new EXIF shape.
       - Preserve the contract that the container installs locally built `safe/` Debian packages and that downstream binaries must resolve `libexif.so.12` to the safe package.
+      - Commit requirement: commit phase changes to git before yielding.
       
       Success Criteria
       - `PACKAGE_BUILD_ROOT=/home/yans/code/safelibs/ported/libexif/safe/.artifacts/impl_06_downstream_cli_library bash safe/tests/run-package-build.sh`
@@ -855,7 +861,7 @@ phases:
       - `LIBEXIF_REQUIRE_REUSE=1 LIBEXIF_ORIGINAL_TEST_IMAGE=libexif-original-test:impl_06_downstream_cli_library LIBEXIF_DOWNSTREAM_PACKAGE_ROOT=/home/yans/code/safelibs/ported/libexif/safe/.artifacts/impl_06_downstream_cli_library ./test-original.sh --mode runtime --only ImageMagick` must fail with `compile-only dependent: ImageMagick only supports --mode compile`
       
       Git Commit Requirement
-      - Commit the phase work to git before yielding. Do not yield with uncommitted changes.
+      The implementer must commit work to git before yielding.
   - id: check_06_downstream_tester
     type: check
     bounce_target: impl_06_downstream_cli_library
@@ -882,7 +888,7 @@ phases:
       imagemagick_runtime_log=$(mktemp)
       trap 'rm -f "$imagemagick_runtime_log"' EXIT
       ./test-original.sh --mode runtime --only exif
-      test "$(docker image inspect "$LIBEXIF_ORIGINAL_TEST_IMAGE" --format '{% raw %}{{ index .Config.Labels "io.safelibs.libexif.image-inputs-sha256" }}{% endraw %}')" = "$expected_image_digest"
+      test "$(docker image inspect "$LIBEXIF_ORIGINAL_TEST_IMAGE" --format '{{ index .Config.Labels "io.safelibs.libexif.image-inputs-sha256" }}')" = "$expected_image_digest"
       for app in exiftran gphoto2 ruby-exif CamlImages; do
         LIBEXIF_REQUIRE_REUSE=1 ./test-original.sh --mode runtime --only "$app"
       done
@@ -943,10 +949,13 @@ phases:
       
       Repository Root: `/home/yans/code/safelibs/ported/libexif`
       
+      Consume or update the listed existing artifacts in place. Do not refetch, recollect, rediscover, or regenerate them from scratch.
+      
       Preexisting Inputs
       - `dependents.json`
       - `test-original.sh`
-      - `safe/tests/testdata/`
+      - existing helper or probe code embedded in `test-original.sh`
+      - `safe/tests/testdata/*`
       - `safe/tests/run-package-build.sh`
       
       New Outputs
@@ -964,7 +973,6 @@ phases:
       - `safe/src/**` as required by failures
       
       Implementation Details
-      - Consume or update the listed artifacts in place. Do not refetch, recollect, rediscover, or regenerate them from scratch.
       - Preserve and extend the existing inline probes in `test-original.sh` rather than replacing them with a new harness. The script already knows how to build fixtures, install packages in the container, and drive GUI or service apps under Xvfb or service-specific configs.
       - Convert any discovered issue into a smaller repo-local regression whenever possible; if only the full app integration can reproduce it, strengthen the existing Docker assertion instead of creating a redundant second harness.
       - Keep the Docker image definition inline in `test-original.sh`. Workflow YAML must remain inline-only and consume the existing script.
@@ -972,6 +980,7 @@ phases:
       - `test-original.sh --mode runtime --only <name>` must not overwrite or truncate an existing 14-row `downstream/runtime-matrix.tsv`. If per-dependent logs or artifacts are useful for focused reruns, place them under a separate non-summary path such as `downstream/only/runtime/<name>/`.
       - Reuse the phase-local package root and phase-local Docker image tag for the full `--mode runtime` invocation and every `--only` rerun in this phase. Run one initial full runtime-matrix invocation without `LIBEXIF_REQUIRE_REUSE`, then reuse-only reruns for the GUI and service entries most likely to regress under Xvfb or service orchestration. Do not rebuild safe packages or the image between entries once the phase-local artifacts exist, and leave the phase-local package root valid for `LIBEXIF_REQUIRE_REUSE=1 bash safe/tests/run-package-build.sh` after the runtime reruns complete.
       - Ensure the GUI or service probes stay deterministic, avoid hidden user-profile state, and keep their assertions tied to observable EXIF behavior rather than brittle UI timing.
+      - Commit requirement: commit phase changes to git before yielding.
       
       Success Criteria
       - `PACKAGE_BUILD_ROOT=/home/yans/code/safelibs/ported/libexif/safe/.artifacts/impl_07_downstream_gui_services bash safe/tests/run-package-build.sh`
@@ -988,7 +997,7 @@ phases:
       - `LIBEXIF_REQUIRE_REUSE=1 LIBEXIF_ORIGINAL_TEST_IMAGE=libexif-original-test:impl_07_downstream_gui_services LIBEXIF_DOWNSTREAM_PACKAGE_ROOT=/home/yans/code/safelibs/ported/libexif/safe/.artifacts/impl_07_downstream_gui_services ./test-original.sh --mode runtime --only libexif-gtk3`
       
       Git Commit Requirement
-      - Commit the phase work to git before yielding. Do not yield with uncommitted changes.
+      The implementer must commit work to git before yielding.
   - id: check_07_downstream_tester
     type: check
     bounce_target: impl_07_downstream_gui_services
@@ -1024,7 +1033,7 @@ phases:
       awk -F'\t' 'NR > 1 { print $1 }' "$runtime_summary" >"$actual_runtime_names"
       diff -u "$expected_runtime_names" "$actual_runtime_names"
       test "$(awk -F'\t' 'NR > 1 && $5 == "ok" { count++ } END { print count + 0 }' "$runtime_summary")" = "14"
-      test "$(docker image inspect "$LIBEXIF_ORIGINAL_TEST_IMAGE" --format '{% raw %}{{ index .Config.Labels "io.safelibs.libexif.image-inputs-sha256" }}{% endraw %}')" = "$expected_image_digest"
+      test "$(docker image inspect "$LIBEXIF_ORIGINAL_TEST_IMAGE" --format '{{ index .Config.Labels "io.safelibs.libexif.image-inputs-sha256" }}')" = "$expected_image_digest"
       for app in eog-plugin-exif-display eog-plugin-map tracker-extract Shotwell FoxtrotGPS GTKam MiniDLNA Gerbera libexif-gtk3; do
         LIBEXIF_REQUIRE_REUSE=1 ./test-original.sh --mode runtime --only "$app"
       done
@@ -1092,17 +1101,18 @@ phases:
       
       Repository Root: `/home/yans/code/safelibs/ported/libexif`
       
+      Consume or update the listed existing artifacts in place. Do not refetch, recollect, rediscover, or regenerate them from scratch.
+      
       Preexisting Inputs
       - `safe/SAFETY.md`
       - `safe/README`
       - `safe/NEWS`
-      - `safe/doc/libexif-api.html/`
       - `safe/build.rs`
-      - `safe/cshim/`
-      - `safe/src/`
+      - `safe/cshim/exif-log-shim.c`
+      - `safe/src/**`
       - `safe/tests/run-package-build.sh`
       - `safe/tests/run-performance-compare.sh`
-      - `safe/tests/perf/`
+      - `safe/tests/perf/{bench-driver.c,fixture-manifest.txt,thresholds.env}`
       
       New Outputs
       - Phase-local package root `safe/.artifacts/impl_08_safety_perf_docs/` with fresh package metadata and validated overlay contents
@@ -1122,15 +1132,14 @@ phases:
       - `safe/tests/perf/{bench-driver.c,fixture-manifest.txt,thresholds.env}`
       
       Implementation Details
-      - Consume or update the listed artifacts in place. Do not refetch, recollect, rediscover, or regenerate them from scratch.
       - Remove any newly unnecessary `unsafe` introduced during compatibility fixes. The final unsafe surface should be limited to true ABI or FFI boundaries and other clearly unavoidable cases.
       - Update `safe/SAFETY.md` so it matches the actual post-phase code, including whether the vendor MakerNote helper C sources are fully gone.
       - Update shipped docs such as `safe/README` so they accurately describe the Rust implementation and its remaining narrow foreign boundaries. The current wording that the library is written in plain C is stale.
-      - Consume the existing API docs tree in place. Do not regenerate `safe/doc/libexif-api.html/` while it already exists; keep validating and shipping the checked-in tree.
       - Use the existing performance harness and thresholds as the contract. Reuse the phase-local package root for performance runs instead of rebuilding the same packaged library again.
       - Run one explicit `run-package-build.sh` call followed by `LIBEXIF_REQUIRE_REUSE=1 bash tests/run-performance-compare.sh`, plus a deliberate missing-root rerun of the performance wrapper that must fail with `reuse-required package root is missing or stale`. Do not let the performance wrapper silently rebuild the package root.
       - If a threshold needs to change, document why in both the code review and `safe/NEWS`, and keep the change backed by measured data rather than convenience.
       - Preserve or improve the current thresholds encoded in `safe/tests/perf/thresholds.env`; do not relax them without measured justification captured in both the code review and `safe/NEWS`.
+      - Commit requirement: commit phase changes to git before yielding.
       
       Success Criteria
       - `PACKAGE_BUILD_ROOT=/home/yans/code/safelibs/ported/libexif/safe/.artifacts/impl_08_safety_perf_docs bash tests/run-package-build.sh`
@@ -1141,7 +1150,7 @@ phases:
       - `! rg -n "written in plain C|does not require any additional library" README SAFETY.md NEWS`
       
       Git Commit Requirement
-      - Commit the phase work to git before yielding. Do not yield with uncommitted changes.
+      The implementer must commit work to git before yielding.
   - id: check_08_hardening_tester
     type: check
     bounce_target: impl_08_safety_perf_docs
@@ -1212,79 +1221,77 @@ phases:
       
       Repository Root: `/home/yans/code/safelibs/ported/libexif`
       
+      Consume or update the listed existing artifacts in place. Do not refetch, recollect, rediscover, or regenerate them from scratch.
+      
       Preexisting Inputs
-      - `original/`
       - `original/libexif/Makefile.am`
       - `original/configure.ac`
       - `original/libexif/libexif.sym`
-      - `original/libexif/exif-tag.c`
       - `original/debian/libexif12.symbols`
-      - `original/test/`
-      - `original/test/nls/`
-      - `original/contrib/examples/`
+      - `original/libexif/exif-tag.c`
+      - `original/libexif/{apple,canon,fuji,olympus,pentax}/*`
+      - `original/test/Makefile.am`
+      - `original/contrib/examples/Makefile.am`
+      - `original/test/*.o`, `original/contrib/examples/*.o`, and `original/test/nls/print-localedir.o` when present
+      - `dependents.json`
+      - `test-original.sh`
       - `safe/Cargo.toml`
       - `safe/Cargo.lock`
       - `safe/COPYING`
       - `safe/README`
       - `safe/NEWS`
+      - `safe/build.rs`
       - `safe/SECURITY.md`
       - `safe/SAFETY.md`
-      - `safe/build.rs`
-      - `safe/cshim/`
-      - `safe/src/`
-      - `safe/include/libexif/`
+      - `safe/cshim/exif-log-shim.c`
+      - `safe/src/ffi/{types.rs,panic_boundary.rs}`
+      - `safe/src/lib.rs`
+      - `safe/src/i18n.rs`
+      - `safe/src/primitives/{byte_order.rs,format.rs,ifd.rs,utils.rs}`
+      - `safe/src/runtime/{mem.rs,log.rs,cstdio.rs}`
+      - `safe/src/object/{content.rs,data.rs,entry.rs}`
+      - `safe/src/parser/{data_load.rs,data_save.rs,loader.rs,limits.rs,mod.rs}`
+      - `safe/src/tables/{mod.rs,data_options.rs,gps_ifd.rs,tag_table.rs}`
+      - `safe/src/mnote/{mod.rs,base.rs,apple.rs,canon.rs,fuji.rs,olympus.rs,pentax.rs}`
+      - `safe/include/libexif/*.h`
       - `safe/libexif.pc.in`
       - `safe/libexif-uninstalled.pc.in`
-      - `safe/debian/`
-      - `safe/po/`
-      - `safe/doc/libexif-api.html/`
-      - `safe/contrib/examples/`
-      - `safe/tests/`
+      - `safe/debian/{rules,control,libexif12.symbols,libexif12.install,libexif-dev.install,libexif-dev.docs,libexif-doc.docs,libexif-doc.examples,libexif-doc.doc-base,changelog}`
+      - `safe/po/*.po`
+      - `safe/po/*.gmo`
+      - `safe/contrib/examples/*.c`
+      - `safe/doc/libexif-api.html/**`
+      - `safe/tests/{abi_layout.rs,primitives_tables.rs,object_model.rs,cve_regressions.rs,ported_c.rs}`
+      - `safe/tests/{run-package-build.sh,run-export-compare.sh,run-c-compile-smoke.sh,run-original-object-link-compat.sh,run-performance-compare.sh,run-original-test-suite.sh,run-c-test.sh,run-cve-regressions.sh,run-original-shell-test.sh,run-original-nls-test.sh,run-test-mnote-matrix.sh}`
+      - `safe/tests/original-c/**`
+      - `safe/tests/original-sh/**`
+      - `safe/tests/support/**`
+      - `safe/tests/link-compat/{object-manifest.txt,run-manifest.txt}`
+      - `safe/tests/perf/{bench-driver.c,fixture-manifest.txt,thresholds.env}`
+      - `safe/tests/testdata/*.jpg`
+      - `safe/tests/testdata/*.parsed`
+      - `safe/tests/smoke/public-api-smoke.c`
       - `relevant_cves.json`
       - `all_cves.json`
-      - `dependents.json`
-      - `test-original.sh`
+      - `safe/tests/cve-regressions-manifest.txt`
+      - `safe/.artifacts/impl_01_abi_packaging/`
+      - `safe/.artifacts/impl_01_abi_packaging/compile-smoke/static/public-api-smoke-static`
+      - `safe/.artifacts/impl_04_source_link_compat/`
+      - `safe/.artifacts/impl_04_source_link_compat/compile-smoke/static/public-api-smoke-static`
+      - `safe/.artifacts/impl_05_downstream_compile/`
+      - `safe/.artifacts/impl_05_downstream_compile/downstream/compile-matrix.tsv`
+      - `safe/.artifacts/impl_06_downstream_cli_library/`
+      - `safe/.artifacts/impl_07_downstream_gui_services/`
+      - `safe/.artifacts/impl_07_downstream_gui_services/downstream/runtime-matrix.tsv`
+      - `safe/.artifacts/impl_08_safety_perf_docs/`
+      - `libexif-original-test:impl_05_downstream_compile`
+      - `libexif-original-test:impl_06_downstream_cli_library`
+      - `libexif-original-test:impl_07_downstream_gui_services`
       - `.plan/goal.md`
       - `.plan/plan.md`
       - `.plan/findings.md`
-      - `.plan/phases/01-abi-packaging.md`
-      - `.plan/phases/02-core-behavior.md`
-      - `.plan/phases/03-makernote-rust-completion.md`
-      - `.plan/phases/04-source-link-compat.md`
-      - `.plan/phases/05-downstream-compile.md`
-      - `.plan/phases/06-downstream-cli-library.md`
-      - `.plan/phases/07-downstream-gui-services.md`
-      - `.plan/phases/08-safety-perf-docs.md`
-      - `.plan/phases/09-final-release.md`
+      - `.plan/phases/*.md`
       - `.plan/workflow-structure.yaml`
-      - `safe/.artifacts/impl_01_abi_packaging/`
-      - `safe/.artifacts/impl_01_abi_packaging/metadata/source-commit.txt`
-      - `safe/.artifacts/impl_01_abi_packaging/metadata/package-inputs.sha256`
-      - `safe/.artifacts/impl_01_abi_packaging/metadata/validated.ok`
-      - `safe/.artifacts/impl_01_abi_packaging/compile-smoke/static/public-api-smoke-static`
-      - `safe/.artifacts/impl_04_source_link_compat/`
-      - `safe/.artifacts/impl_04_source_link_compat/metadata/source-commit.txt`
-      - `safe/.artifacts/impl_04_source_link_compat/metadata/package-inputs.sha256`
-      - `safe/.artifacts/impl_04_source_link_compat/metadata/validated.ok`
-      - `safe/.artifacts/impl_04_source_link_compat/compile-smoke/static/public-api-smoke-static`
-      - `safe/.artifacts/impl_05_downstream_compile/`
-      - `safe/.artifacts/impl_05_downstream_compile/metadata/source-commit.txt`
-      - `safe/.artifacts/impl_05_downstream_compile/metadata/package-inputs.sha256`
-      - `safe/.artifacts/impl_05_downstream_compile/metadata/validated.ok`
-      - `safe/.artifacts/impl_05_downstream_compile/downstream/compile-matrix.tsv`
-      - `safe/.artifacts/impl_06_downstream_cli_library/`
-      - `safe/.artifacts/impl_06_downstream_cli_library/metadata/source-commit.txt`
-      - `safe/.artifacts/impl_06_downstream_cli_library/metadata/package-inputs.sha256`
-      - `safe/.artifacts/impl_06_downstream_cli_library/metadata/validated.ok`
-      - `safe/.artifacts/impl_07_downstream_gui_services/`
-      - `safe/.artifacts/impl_07_downstream_gui_services/metadata/source-commit.txt`
-      - `safe/.artifacts/impl_07_downstream_gui_services/metadata/package-inputs.sha256`
-      - `safe/.artifacts/impl_07_downstream_gui_services/metadata/validated.ok`
-      - `safe/.artifacts/impl_07_downstream_gui_services/downstream/runtime-matrix.tsv`
-      - `safe/.artifacts/impl_08_safety_perf_docs/`
-      - `safe/.artifacts/impl_08_safety_perf_docs/metadata/source-commit.txt`
-      - `safe/.artifacts/impl_08_safety_perf_docs/metadata/package-inputs.sha256`
-      - `safe/.artifacts/impl_08_safety_perf_docs/metadata/validated.ok`
       
       New Outputs
       - Phase-local package root `safe/.artifacts/impl_09_final_release/` with fresh package metadata and validated overlay contents
@@ -1296,44 +1303,26 @@ phases:
       - Final package or changelog adjustments for the release-ready state
       
       File Changes
-      - `safe/build.rs`
-      - `safe/Cargo.toml` and `safe/Cargo.lock` if the release gate exposes a final build-configuration or dependency correction
-      - `safe/cshim/exif-log-shim.c`
-      - `safe/src/`
-      - `safe/include/libexif/`
-      - `safe/libexif.pc.in`
-      - `safe/libexif-uninstalled.pc.in`
-      - `safe/debian/`
-      - `safe/README`
-      - `safe/NEWS`
-      - `safe/SAFETY.md`
-      - `safe/tests/`
-      - `safe/tests/link-compat/`
-      - `safe/tests/perf/`
-      - `safe/tests/testdata/`
-      - `safe/contrib/examples/`
-      - `dependents.json` only if a factual inventory error must be corrected in place
-      - `test-original.sh`
+      - Any previously listed compatibility, test, packaging, or documentation file as required by residual issues
+      - `safe/debian/changelog` if the final release candidate needs a packaging note
       
       Implementation Details
-      - Consume or update the listed artifacts in place. Do not refetch, recollect, rediscover, or regenerate them from scratch.
       - This is the only catch-all phase. Use it to absorb residual failures discovered by earlier dedicated phases, not to invent new test classes.
       - Keep fixes focused and traceable. Every late fix should still come with a local regression or a strengthened existing harness assertion.
       - The final release gate must rerun `bash tests/run-original-test-suite.sh` after `cargo test --release`, even if earlier phases already used it. The end-of-work proof has to explicitly revalidate the copied original C, shell, NLS, parser, and MakerNote-sensitive suite at the final commit rather than relying on stale earlier evidence.
-      - Preserve the consume-existing-artifacts contract at the final gate. Do not regenerate `dependents.json` or `safe/doc/libexif-api.html/` while they already exist, and keep consuming the existing link-compat manifests, performance fixtures, CVE manifests, locales, test data, and planning artifacts in place.
-      - Preserve parser tests that require explicit fixtures. Any late harness edits must keep the existing explicit fixture argv and `TEST_IMAGES` contracts rather than weakening them into rediscovery or implicit fixture enumeration.
-      - Preserve the exact package-root freshness contract from phase 1 in the final gate: `metadata/package-inputs.sha256` must contain the exact sorted `sha256sum`-style manifest, with one `<sha256><two spaces><repo-relative-path>` line per input file, over `safe/{Cargo.toml,Cargo.lock,build.rs,COPYING,README,NEWS,SECURITY.md,libexif.pc.in,libexif-uninstalled.pc.in}`, `safe/src/**`, `safe/cshim/**`, `safe/include/**`, `safe/debian/**`, `safe/po/**`, `safe/contrib/examples/**`, `safe/doc/libexif-api.html/**`, `safe/tests/run-package-build.sh`, and any `original/**` file still consumed by the safe build such as `original/libexif/libexif.sym` and `original/libexif/exif-tag.c`.
-      - `./test-original.sh --mode all` must run the complete compile matrix first and then the runtime matrix, reusing the same validated `LIBEXIF_DOWNSTREAM_PACKAGE_ROOT` and the same validated `LIBEXIF_ORIGINAL_TEST_IMAGE` within that invocation, and both downstream summary files must come from that single run.
       - Reuse the phase-local package root and phase-local Docker image tag for every package-backed command in this phase. The final release checker must prove that contract both positively and negatively for every wrapper named in the workflow contract: `run-package-build.sh`, `run-export-compare.sh`, `run-c-compile-smoke.sh`, `run-original-object-link-compat.sh`, and `run-performance-compare.sh` must all succeed against the existing root under `LIBEXIF_REQUIRE_REUSE=1`; each must fail with `reuse-required package root is missing or stale` when pointed at a deliberately missing root; and at least one local wrapper must also be exercised against a deliberately stale copied root that fails with the same substring. `test-original.sh` must likewise reject deliberately missing and deliberately stale image or downstream-package-root inputs with the exact reuse-only substrings. Do not treat the initial package-root creation as sufficient evidence for `run-package-build.sh`; rerun it in explicit reuse-only mode against the populated final root and against a deliberately missing root. Do not rebuild the same final current-commit package artifacts between local scripts and the downstream Docker harness.
-      - Earlier phase-local package roots remain immutable here: phase 9 may create and reuse `safe/.artifacts/impl_09_final_release/`, but it may not overwrite or repurpose any earlier phase-local package root.
+      - The final phase-local `metadata/package-inputs.sha256` must preserve the exact sorted `sha256sum`-style manifest contract from phase 1 over the full package-affecting input set, including `safe/po/**`, `safe/contrib/examples/**`, `safe/doc/libexif-api.html/**`, and any consumed `original/**` build inputs. Late fixes must not drop existing copied locales, docs, or examples from that contract.
       - The final release checker must verify the static-link proof directly by executing `safe/.artifacts/impl_09_final_release/compile-smoke/static/public-api-smoke-static` and confirming that `readelf -d` contains no `NEEDED` entry for `libexif.so.12`.
       - The final release checker must diff `safe/.artifacts/impl_09_final_release/downstream/compile-matrix.tsv` against `jq -r '.dependents[].name' dependents.json` and require exactly 15 `status=ok` rows so a partial compile matrix cannot pass.
       - The final release checker must diff `safe/.artifacts/impl_09_final_release/downstream/runtime-matrix.tsv` against `jq -r '.dependents[] | select(.runtime_functionality != null) | .name' dependents.json` and require exactly 14 `status=ok` rows so `--mode all` cannot silently skip runtime-capable dependents after catch-all edits.
       - Before the final `./test-original.sh --mode all` invocation, the checker must delete any preexisting `downstream/compile-matrix.tsv` and `downstream/runtime-matrix.tsv` files so both summaries are forced to be recreated by that exact final run instead of being inherited from an earlier phase.
       - Focused reuse-only reruns after the final full-matrix pass must leave the full 15-row compile summary and full 14-row runtime summary intact, and must leave `safe/.artifacts/impl_09_final_release/` valid for `LIBEXIF_REQUIRE_REUSE=1 bash safe/tests/run-package-build.sh`.
       - The final release checker must assert the exact compile-only rejection string `compile-only dependent: ImageMagick only supports --mode compile` rather than treating any nonzero exit as sufficient.
+      - Preserve earlier comparison policies during late fixes: do not weaken parser tests that depend on explicit fixture argv or `TEST_IMAGES`, and do not relax existing link-compat comparison modes or file-content checks just to get the final reruns green.
       - Do not parallelize the final verification commands. The shared package-build scripts and Docker harnesses must remain serial.
       - The final commit should represent the release-candidate state that all checkers reason about.
+      - If any canonical planning artifact under `.plan/` needs adjustment while executing this phase, rewrite `.plan/goal.md`, `.plan/plan.md`, `.plan/findings.md`, existing `.plan/phases/*.md`, and `.plan/workflow-structure.yaml` in place rather than creating a second planning tree.
+      - Commit requirement: commit phase changes to git before yielding.
       
       Critical Files
       - `safe/build.rs`: central build glue for version-script generation, SONAME injection, gettext env propagation, the log shim, and the remaining MakerNote helper C compilation that phase 3 should remove; the current high-value seams are `safe/build.rs:13-57` and `safe/build.rs:62-278`.
@@ -1372,12 +1361,11 @@ phases:
       8. `cd /home/yans/code/safelibs/ported/libexif/safe && export PACKAGE_BUILD_ROOT=/home/yans/code/safelibs/ported/libexif/safe/.artifacts/impl_09_final_release && LIBEXIF_REQUIRE_REUSE=1 PACKAGE_BUILD_ROOT="$PACKAGE_BUILD_ROOT" bash tests/run-original-object-link-compat.sh`
       9. `cd /home/yans/code/safelibs/ported/libexif/safe && export PACKAGE_BUILD_ROOT=/home/yans/code/safelibs/ported/libexif/safe/.artifacts/impl_09_final_release && LIBEXIF_REQUIRE_REUSE=1 PACKAGE_BUILD_ROOT="$PACKAGE_BUILD_ROOT" bash tests/run-performance-compare.sh`
       10. `cd /home/yans/code/safelibs/ported/libexif/safe && export PACKAGE_BUILD_ROOT=/home/yans/code/safelibs/ported/libexif/safe/.artifacts/impl_09_final_release && missing_local_root="$PACKAGE_BUILD_ROOT.missing" && stale_local_root="$PACKAGE_BUILD_ROOT.stale" && missing_build_log=$(mktemp) && missing_export_log=$(mktemp) && missing_compile_log=$(mktemp) && missing_link_log=$(mktemp) && missing_perf_log=$(mktemp) && stale_local_root_log=$(mktemp) && trap 'rm -f "$missing_build_log" "$missing_export_log" "$missing_compile_log" "$missing_link_log" "$missing_perf_log" "$stale_local_root_log"; rm -rf "$stale_local_root"' EXIT && rm -rf "$missing_local_root" && if LIBEXIF_REQUIRE_REUSE=1 PACKAGE_BUILD_ROOT="$missing_local_root" bash tests/run-package-build.sh >"$missing_build_log" 2>&1; then cat "$missing_build_log" >&2; exit 1; fi && grep -F "reuse-required package root is missing or stale" "$missing_build_log" && if LIBEXIF_REQUIRE_REUSE=1 PACKAGE_BUILD_ROOT="$missing_local_root" bash tests/run-export-compare.sh >"$missing_export_log" 2>&1; then cat "$missing_export_log" >&2; exit 1; fi && grep -F "reuse-required package root is missing or stale" "$missing_export_log" && if LIBEXIF_REQUIRE_REUSE=1 PACKAGE_BUILD_ROOT="$missing_local_root" bash tests/run-c-compile-smoke.sh >"$missing_compile_log" 2>&1; then cat "$missing_compile_log" >&2; exit 1; fi && grep -F "reuse-required package root is missing or stale" "$missing_compile_log" && if LIBEXIF_REQUIRE_REUSE=1 PACKAGE_BUILD_ROOT="$missing_local_root" bash tests/run-original-object-link-compat.sh >"$missing_link_log" 2>&1; then cat "$missing_link_log" >&2; exit 1; fi && grep -F "reuse-required package root is missing or stale" "$missing_link_log" && if LIBEXIF_REQUIRE_REUSE=1 PACKAGE_BUILD_ROOT="$missing_local_root" bash tests/run-performance-compare.sh >"$missing_perf_log" 2>&1; then cat "$missing_perf_log" >&2; exit 1; fi && grep -F "reuse-required package root is missing or stale" "$missing_perf_log" && rm -rf "$stale_local_root" && cp -a "$PACKAGE_BUILD_ROOT" "$stale_local_root" && printf 'stale\n' >"$stale_local_root/metadata/source-commit.txt" && if LIBEXIF_REQUIRE_REUSE=1 PACKAGE_BUILD_ROOT="$stale_local_root" bash tests/run-export-compare.sh >"$stale_local_root_log" 2>&1; then cat "$stale_local_root_log" >&2; exit 1; fi && grep -F "reuse-required package root is missing or stale" "$stale_local_root_log"`
-      11. `cd /home/yans/code/safelibs/ported/libexif && export LIBEXIF_ORIGINAL_TEST_IMAGE=libexif-original-test:impl_09_final_release LIBEXIF_DOWNSTREAM_PACKAGE_ROOT=/home/yans/code/safelibs/ported/libexif/safe/.artifacts/impl_09_final_release && expected_image_digest="$(./test-original.sh --print-image-inputs-sha256)" && compile_summary="$LIBEXIF_DOWNSTREAM_PACKAGE_ROOT/downstream/compile-matrix.tsv" && runtime_summary="$LIBEXIF_DOWNSTREAM_PACKAGE_ROOT/downstream/runtime-matrix.tsv" && expected_compile_names=$(mktemp) && actual_compile_names=$(mktemp) && expected_runtime_names=$(mktemp) && actual_runtime_names=$(mktemp) && trap 'rm -f "$expected_compile_names" "$actual_compile_names" "$expected_runtime_names" "$actual_runtime_names"' EXIT && rm -f "$compile_summary" "$runtime_summary" && ./test-original.sh --mode all && test "$(docker image inspect "$LIBEXIF_ORIGINAL_TEST_IMAGE" --format '{% raw %}{{ index .Config.Labels "io.safelibs.libexif.image-inputs-sha256" }}{% endraw %}')" = "$expected_image_digest" && test -f "$compile_summary" && test "$(head -n1 "$compile_summary")" = $'name\tsource_package\tassertion\tartifact\tstatus' && jq -r '.dependents[].name' dependents.json >"$expected_compile_names" && awk -F'\t' 'NR > 1 { print $1 }' "$compile_summary" >"$actual_compile_names" && diff -u "$expected_compile_names" "$actual_compile_names" && test "$(awk -F'\t' 'NR > 1 && $5 == "ok" { count++ } END { print count + 0 }' "$compile_summary")" = "15" && test -f "$runtime_summary" && test "$(head -n1 "$runtime_summary")" = $'name\tsource_package\tassertion\tartifact\tstatus' && jq -r '.dependents[] | select(.runtime_functionality != null) | .name' dependents.json >"$expected_runtime_names" && awk -F'\t' 'NR > 1 { print $1 }' "$runtime_summary" >"$actual_runtime_names" && diff -u "$expected_runtime_names" "$actual_runtime_names" && test "$(awk -F'\t' 'NR > 1 && $5 == "ok" { count++ } END { print count + 0 }' "$runtime_summary")" = "14"`
+      11. `cd /home/yans/code/safelibs/ported/libexif && export LIBEXIF_ORIGINAL_TEST_IMAGE=libexif-original-test:impl_09_final_release LIBEXIF_DOWNSTREAM_PACKAGE_ROOT=/home/yans/code/safelibs/ported/libexif/safe/.artifacts/impl_09_final_release && expected_image_digest="$(./test-original.sh --print-image-inputs-sha256)" && compile_summary="$LIBEXIF_DOWNSTREAM_PACKAGE_ROOT/downstream/compile-matrix.tsv" && runtime_summary="$LIBEXIF_DOWNSTREAM_PACKAGE_ROOT/downstream/runtime-matrix.tsv" && expected_compile_names=$(mktemp) && actual_compile_names=$(mktemp) && expected_runtime_names=$(mktemp) && actual_runtime_names=$(mktemp) && trap 'rm -f "$expected_compile_names" "$actual_compile_names" "$expected_runtime_names" "$actual_runtime_names"' EXIT && rm -f "$compile_summary" "$runtime_summary" && ./test-original.sh --mode all && test "$(docker image inspect "$LIBEXIF_ORIGINAL_TEST_IMAGE" --format '{{ index .Config.Labels "io.safelibs.libexif.image-inputs-sha256" }}')" = "$expected_image_digest" && test -f "$compile_summary" && test "$(head -n1 "$compile_summary")" = $'name\tsource_package\tassertion\tartifact\tstatus' && jq -r '.dependents[].name' dependents.json >"$expected_compile_names" && awk -F'\t' 'NR > 1 { print $1 }' "$compile_summary" >"$actual_compile_names" && diff -u "$expected_compile_names" "$actual_compile_names" && test "$(awk -F'\t' 'NR > 1 && $5 == "ok" { count++ } END { print count + 0 }' "$compile_summary")" = "15" && test -f "$runtime_summary" && test "$(head -n1 "$runtime_summary")" = $'name\tsource_package\tassertion\tartifact\tstatus' && jq -r '.dependents[] | select(.runtime_functionality != null) | .name' dependents.json >"$expected_runtime_names" && awk -F'\t' 'NR > 1 { print $1 }' "$runtime_summary" >"$actual_runtime_names" && diff -u "$expected_runtime_names" "$actual_runtime_names" && test "$(awk -F'\t' 'NR > 1 && $5 == "ok" { count++ } END { print count + 0 }' "$runtime_summary")" = "14"`
       12. `cd /home/yans/code/safelibs/ported/libexif && export LIBEXIF_ORIGINAL_TEST_IMAGE=libexif-original-test:impl_09_final_release LIBEXIF_DOWNSTREAM_PACKAGE_ROOT=/home/yans/code/safelibs/ported/libexif/safe/.artifacts/impl_09_final_release && compile_summary="$LIBEXIF_DOWNSTREAM_PACKAGE_ROOT/downstream/compile-matrix.tsv" && runtime_summary="$LIBEXIF_DOWNSTREAM_PACKAGE_ROOT/downstream/runtime-matrix.tsv" && expected_compile_names=$(mktemp) && actual_compile_names=$(mktemp) && expected_runtime_names=$(mktemp) && actual_runtime_names=$(mktemp) && trap 'rm -f "$expected_compile_names" "$actual_compile_names" "$expected_runtime_names" "$actual_runtime_names"' EXIT && jq -r '.dependents[].name' dependents.json >"$expected_compile_names" && jq -r '.dependents[] | select(.runtime_functionality != null) | .name' dependents.json >"$expected_runtime_names" && LIBEXIF_REQUIRE_REUSE=1 ./test-original.sh --mode compile --only exif && LIBEXIF_REQUIRE_REUSE=1 ./test-original.sh --mode runtime --only exif && awk -F'\t' 'NR > 1 { print $1 }' "$compile_summary" >"$actual_compile_names" && diff -u "$expected_compile_names" "$actual_compile_names" && test "$(awk -F'\t' 'NR > 1 && $5 == "ok" { count++ } END { print count + 0 }' "$compile_summary")" = "15" && awk -F'\t' 'NR > 1 { print $1 }' "$runtime_summary" >"$actual_runtime_names" && diff -u "$expected_runtime_names" "$actual_runtime_names" && test "$(awk -F'\t' 'NR > 1 && $5 == "ok" { count++ } END { print count + 0 }' "$runtime_summary")" = "14" && LIBEXIF_REQUIRE_REUSE=1 PACKAGE_BUILD_ROOT="$LIBEXIF_DOWNSTREAM_PACKAGE_ROOT" bash safe/tests/run-package-build.sh >/dev/null`
       13. `cd /home/yans/code/safelibs/ported/libexif && export LIBEXIF_ORIGINAL_TEST_IMAGE=libexif-original-test:impl_09_final_release LIBEXIF_DOWNSTREAM_PACKAGE_ROOT=/home/yans/code/safelibs/ported/libexif/safe/.artifacts/impl_09_final_release && missing_image_log=$(mktemp) && stale_image_log=$(mktemp) && missing_root_log=$(mktemp) && stale_root_log=$(mktemp) && stale_image_tag="${LIBEXIF_ORIGINAL_TEST_IMAGE}-stale" && stale_root="${LIBEXIF_DOWNSTREAM_PACKAGE_ROOT}.stale" && trap 'rm -f "$missing_image_log" "$stale_image_log" "$missing_root_log" "$stale_root_log"; rm -rf "$stale_root"; docker image rm -f "$stale_image_tag" >/dev/null 2>&1 || true' EXIT && docker image rm -f "${LIBEXIF_ORIGINAL_TEST_IMAGE}-missing" >/dev/null 2>&1 || true && if LIBEXIF_REQUIRE_REUSE=1 LIBEXIF_ORIGINAL_TEST_IMAGE="${LIBEXIF_ORIGINAL_TEST_IMAGE}-missing" ./test-original.sh --mode compile --only exif >"$missing_image_log" 2>&1; then cat "$missing_image_log" >&2; exit 1; fi && grep -F "reuse-required docker image is missing or stale" "$missing_image_log" && docker tag ubuntu:24.04 "$stale_image_tag" && if LIBEXIF_REQUIRE_REUSE=1 LIBEXIF_ORIGINAL_TEST_IMAGE="$stale_image_tag" ./test-original.sh --mode compile --only exif >"$stale_image_log" 2>&1; then cat "$stale_image_log" >&2; exit 1; fi && grep -F "reuse-required docker image is missing or stale" "$stale_image_log" && rm -rf "${LIBEXIF_DOWNSTREAM_PACKAGE_ROOT}.missing" && if LIBEXIF_REQUIRE_REUSE=1 LIBEXIF_DOWNSTREAM_PACKAGE_ROOT="${LIBEXIF_DOWNSTREAM_PACKAGE_ROOT}.missing" ./test-original.sh --mode compile --only exif >"$missing_root_log" 2>&1; then cat "$missing_root_log" >&2; exit 1; fi && grep -F "reuse-required package root is missing or stale" "$missing_root_log" && rm -rf "$stale_root" && cp -a "$LIBEXIF_DOWNSTREAM_PACKAGE_ROOT" "$stale_root" && printf 'stale\n' >"$stale_root/metadata/source-commit.txt" && if LIBEXIF_REQUIRE_REUSE=1 LIBEXIF_DOWNSTREAM_PACKAGE_ROOT="$stale_root" ./test-original.sh --mode compile --only exif >"$stale_root_log" 2>&1; then cat "$stale_root_log" >&2; exit 1; fi && grep -F "reuse-required package root is missing or stale" "$stale_root_log"`
       14. `cd /home/yans/code/safelibs/ported/libexif && export LIBEXIF_ORIGINAL_TEST_IMAGE=libexif-original-test:impl_09_final_release LIBEXIF_DOWNSTREAM_PACKAGE_ROOT=/home/yans/code/safelibs/ported/libexif/safe/.artifacts/impl_09_final_release && imagemagick_runtime_log=$(mktemp) && trap 'rm -f "$imagemagick_runtime_log"' EXIT && if LIBEXIF_REQUIRE_REUSE=1 ./test-original.sh --mode runtime --only ImageMagick >"$imagemagick_runtime_log" 2>&1; then cat "$imagemagick_runtime_log" >&2; exit 1; fi && grep -F "compile-only dependent: ImageMagick only supports --mode compile" "$imagemagick_runtime_log"`
       
-      Success Criteria
       The final result is acceptable only if all of the following are true:
       
         - The safe build still exports the exact symbol set and symbol versions required by the original manifests.
@@ -1393,8 +1381,22 @@ phases:
         - Performance remains within `safe/tests/perf/thresholds.env`.
         - `safe/SAFETY.md` matches the actual remaining `unsafe` or FFI surface, and any residual non-Rust implementation code is explicitly justified as unavoidable.
       
+      Success Criteria
+      - The safe build still exports the exact symbol set and symbol versions required by the original manifests.
+      - The packaged library, headers, static archive, docs, examples, doc-base entry, and locales install under the expected Debian paths and produce `libexif12`, `libexif-dev`, and `libexif-doc`.
+      - The final package root's `metadata/source-commit.txt`, `metadata/package-inputs.sha256`, and `metadata/validated.ok` match the current workspace, and `bash tests/run-package-build.sh --print-package-inputs-manifest` diffs cleanly against the stored manifest.
+      - The final gate reruns `bash tests/run-original-test-suite.sh`, so the copied original C, shell, NLS, parser, and MakerNote-sensitive suite is revalidated at the release-candidate commit; all copied original C, shell, NLS, CVE, object-model, and primitive tests pass, and the dedicated MakerNote matrix passes.
+      - Previously compiled original object files relink against `libexif-safe` and match original runtime behavior and output files according to the manifest comparison policy.
+      - Source-compiled smoke clients still build against the packaged headers and pkg-config data, and the static-link smoke path proves that the packaged `libexif.a` is usable by executing `safe/.artifacts/impl_09_final_release/compile-smoke/static/public-api-smoke-static` and showing that `readelf -d` contains no `NEEDED` entry for `libexif.so.12`.
+      - Every current downstream name in `dependents.json` successfully completes its explicit compile-mode check against the installed safe packages, including the entries that previously had only runtime coverage and the compile-only `ImageMagick` source-build-plus-`identify` assertion, and `safe/.artifacts/impl_09_final_release/downstream/compile-matrix.tsv` proves that coverage with exactly 15 `status=ok` rows whose name column matches `dependents.json`.
+      - The full downstream runtime matrix passes for every dependent whose `runtime_functionality` is non-null in `dependents.json`, `safe/.artifacts/impl_09_final_release/downstream/runtime-matrix.tsv` proves that coverage with exactly 14 `status=ok` rows whose name column matches the runtime-capable subset of `dependents.json`, and compile-only dependents are rejected from runtime mode with the exact substring `compile-only dependent: ImageMagick only supports --mode compile` while still passing compile mode.
+      - Focused reuse-only downstream reruns leave the full-matrix `downstream/compile-matrix.tsv` and `downstream/runtime-matrix.tsv` files intact and leave `safe/.artifacts/impl_09_final_release/` valid for `LIBEXIF_REQUIRE_REUSE=1 bash safe/tests/run-package-build.sh`.
+      - Reuse-only reruns are checker-visible: every package-backed local wrapper passes with `LIBEXIF_REQUIRE_REUSE=1` against the existing root, including `safe/tests/run-package-build.sh`; deliberately missing local package roots fail with `reuse-required package root is missing or stale` for every wrapper, including `safe/tests/run-package-build.sh`; at least one deliberately stale copied local root fails with the same substring; the final Docker image label matches `./test-original.sh --print-image-inputs-sha256`; targeted downstream reruns pass with `LIBEXIF_REQUIRE_REUSE=1`; deliberately missing and deliberately stale Docker images fail with `reuse-required docker image is missing or stale`; and deliberately missing and deliberately stale downstream package roots fail with `reuse-required package root is missing or stale`.
+      - Performance remains within `safe/tests/perf/thresholds.env`.
+      - `safe/SAFETY.md` matches the actual remaining `unsafe` or FFI surface, and any residual non-Rust implementation code is explicitly justified as unavoidable.
+      
       Git Commit Requirement
-      - Commit the phase work to git before yielding. Do not yield with uncommitted changes.
+      The implementer must commit work to git before yielding.
   - id: check_09_release_tester
     type: check
     bounce_target: impl_09_final_release
@@ -1498,7 +1500,7 @@ phases:
       runtime_summary="$LIBEXIF_DOWNSTREAM_PACKAGE_ROOT/downstream/runtime-matrix.tsv"
       rm -f "$compile_summary" "$runtime_summary"
       ./test-original.sh --mode all
-      test "$(docker image inspect "$LIBEXIF_ORIGINAL_TEST_IMAGE" --format '{% raw %}{{ index .Config.Labels "io.safelibs.libexif.image-inputs-sha256" }}{% endraw %}')" = "$expected_image_digest"
+      test "$(docker image inspect "$LIBEXIF_ORIGINAL_TEST_IMAGE" --format '{{ index .Config.Labels "io.safelibs.libexif.image-inputs-sha256" }}')" = "$expected_image_digest"
       test -f "$compile_summary"
       test "$(head -n1 "$compile_summary")" = $'name\tsource_package\tassertion\tartifact\tstatus'
       jq -r '.dependents[].name' dependents.json >"$expected_compile_names"
@@ -1581,15 +1583,15 @@ phases:
       actual_compile_names=$(mktemp)
       expected_runtime_names=$(mktemp)
       actual_runtime_names=$(mktemp)
-      missing_local_root_log=$(mktemp)
       missing_build_root_log=$(mktemp)
+      missing_local_root_log=$(mktemp)
       missing_image_log=$(mktemp)
       stale_image_log=$(mktemp)
       imagemagick_runtime_log=$(mktemp)
       static_smoke="$PACKAGE_BUILD_ROOT/compile-smoke/static/public-api-smoke-static"
       missing_local_root="${PACKAGE_BUILD_ROOT}.missing"
       stale_image_tag="libexif-original-test:impl_09_final_release-stale"
-      trap 'rm -f "$expected_manifest" "$expected_compile_names" "$actual_compile_names" "$expected_runtime_names" "$actual_runtime_names" "$missing_local_root_log" "$missing_build_root_log" "$missing_image_log" "$stale_image_log" "$imagemagick_runtime_log"; docker image rm -f "$stale_image_tag" >/dev/null 2>&1 || true' EXIT
+      trap 'rm -f "$expected_manifest" "$expected_compile_names" "$actual_compile_names" "$expected_runtime_names" "$actual_runtime_names" "$missing_build_root_log" "$missing_local_root_log" "$missing_image_log" "$stale_image_log" "$imagemagick_runtime_log"; docker image rm -f "$stale_image_tag" >/dev/null 2>&1 || true' EXIT
       cargo test --release
       bash tests/run-original-test-suite.sh
       bash tests/run-test-mnote-matrix.sh
@@ -1624,7 +1626,7 @@ phases:
       runtime_summary="$LIBEXIF_DOWNSTREAM_PACKAGE_ROOT/downstream/runtime-matrix.tsv"
       rm -f "$compile_summary" "$runtime_summary"
       ./test-original.sh --mode all
-      test "$(docker image inspect "$LIBEXIF_ORIGINAL_TEST_IMAGE" --format '{% raw %}{{ index .Config.Labels "io.safelibs.libexif.image-inputs-sha256" }}{% endraw %}')" = "$expected_image_digest"
+      test "$(docker image inspect "$LIBEXIF_ORIGINAL_TEST_IMAGE" --format '{{ index .Config.Labels "io.safelibs.libexif.image-inputs-sha256" }}')" = "$expected_image_digest"
       test -f "$compile_summary"
       test "$(head -n1 "$compile_summary")" = $'name\tsource_package\tassertion\tartifact\tstatus'
       jq -r '.dependents[].name' dependents.json >"$expected_compile_names"
