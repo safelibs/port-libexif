@@ -16,7 +16,7 @@ use crate::object::data::{
 
 const EXIF_TAG_MAKER_NOTE: ExifTag = 0x927c;
 
-unsafe fn find_entry_impl(data: *mut ExifData, tag: ExifTag) -> *mut ExifEntry {
+pub(crate) unsafe fn find_entry_impl(data: *mut ExifData, tag: ExifTag) -> *mut ExifEntry {
     if data.is_null() {
         return core::ptr::null_mut();
     }

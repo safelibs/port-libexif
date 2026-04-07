@@ -1,9 +1,20 @@
-use core::ffi::{c_char, c_uchar, c_uint};
+use core::ffi::{c_char, c_int, c_uchar, c_uint};
 use core::mem::size_of;
 use core::ptr;
+use std::fmt::Write;
 
 use crate::ffi::panic_boundary;
-use crate::ffi::types::{ExifByteOrder, ExifLog, ExifMem, ExifMnoteData, ExifMnoteDataPriv};
+use crate::ffi::types::{
+    ExifByteOrder, ExifFormat, ExifLog, ExifMem, ExifMnoteData, ExifMnoteDataPriv,
+    EXIF_FORMAT_ASCII, EXIF_FORMAT_LONG, EXIF_FORMAT_RATIONAL, EXIF_FORMAT_SHORT,
+    EXIF_FORMAT_SLONG, EXIF_FORMAT_SRATIONAL, EXIF_FORMAT_SSHORT,
+};
+use crate::i18n::{empty_message, gettext, Message};
+use crate::primitives::format::{exif_format_get_name_impl, exif_format_get_size_impl};
+use crate::primitives::utils::{
+    exif_get_long, exif_get_rational, exif_get_short, exif_get_slong, exif_get_srational,
+    exif_get_sshort,
+};
 use crate::runtime::log::{exif_log_ref_impl, exif_log_unref_impl};
 use crate::runtime::mem::{
     exif_mem_alloc_impl, exif_mem_free_impl, exif_mem_ref_impl, exif_mem_unref_impl,
@@ -254,4 +265,232 @@ pub unsafe extern "C" fn exif_mnote_data_get_value(
                 get_value_fn(note, index, value, maxlen)
             })
     })
+}
+
+#[derive(Clone, Copy)]
+pub(crate) struct TagInfo {
+    pub tag: c_int,
+    pub name: Option<Message>,
+    pub title: Option<Message>,
+    pub description: Option<Message>,
+}
+
+pub(crate) fn find_tag_info(table: &[TagInfo], tag: c_int) -> Option<TagInfo> {
+    table.iter().copied().find(|entry| entry.tag == tag)
+}
+
+pub(crate) fn tag_name_from_table(table: &[TagInfo], tag: c_int) -> *const c_char {
+    find_tag_info(table, tag)
+        .and_then(|entry| entry.name)
+        .map_or(ptr::null(), Message::as_ptr)
+}
+
+pub(crate) fn tag_title_from_table(table: &[TagInfo], tag: c_int) -> *const c_char {
+    find_tag_info(table, tag)
+        .and_then(|entry| entry.title)
+        .map_or(ptr::null(), gettext)
+}
+
+pub(crate) fn tag_description_from_table(table: &[TagInfo], tag: c_int) -> *const c_char {
+    find_tag_info(table, tag)
+        .and_then(|entry| entry.description)
+        .map_or(ptr::null(), gettext_or_empty)
+}
+
+fn gettext_or_empty(message: Message) -> *const c_char {
+    if message.is_empty() {
+        gettext(empty_message())
+    } else {
+        gettext(message)
+    }
+}
+
+pub(crate) fn check_overflow(offset: usize, datasize: usize, structsize: usize) -> bool {
+    offset >= datasize || structsize > datasize || offset > datasize.saturating_sub(structsize)
+}
+
+pub(crate) unsafe fn zero_buffer(buffer: *mut c_char, maxlen: c_uint) -> bool {
+    if buffer.is_null() || maxlen == 0 {
+        return false;
+    }
+
+    unsafe { ptr::write_bytes(buffer.cast::<u8>(), 0, maxlen as usize) };
+    true
+}
+
+pub(crate) unsafe fn write_slice_to_buffer(
+    buffer: *mut c_char,
+    maxlen: c_uint,
+    bytes: &[u8],
+) -> *mut c_char {
+    if !unsafe { zero_buffer(buffer, maxlen) } {
+        return ptr::null_mut();
+    }
+
+    let copy_len = bytes.len().min(maxlen.saturating_sub(1) as usize);
+    if copy_len > 0 {
+        unsafe { ptr::copy_nonoverlapping(bytes.as_ptr(), buffer.cast::<u8>(), copy_len) };
+    }
+    buffer
+}
+
+pub(crate) unsafe fn write_str_to_buffer(
+    buffer: *mut c_char,
+    maxlen: c_uint,
+    value: &str,
+) -> *mut c_char {
+    unsafe { write_slice_to_buffer(buffer, maxlen, value.as_bytes()) }
+}
+
+pub(crate) fn invalid_format_message(actual: ExifFormat, expected: &[ExifFormat]) -> String {
+    let actual_name = c_string_or_unknown(exif_format_get_name_impl(actual));
+    let expected_names = expected
+        .iter()
+        .map(|format| c_string_or_unknown(exif_format_get_name_impl(*format)))
+        .collect::<Vec<_>>();
+
+    match expected_names.as_slice() {
+        [expected_name] => {
+            format!("Invalid format '{actual_name}', expected '{expected_name}'.")
+        }
+        [first, second] => {
+            format!("Invalid format '{actual_name}', expected '{first}' or '{second}'.")
+        }
+        _ => format!("Invalid format '{actual_name}'."),
+    }
+}
+
+pub(crate) fn invalid_components_message(components: u64, expected: &[u64]) -> String {
+    match expected {
+        [expected] => format!("Invalid number of components ({components}, expected {expected})."),
+        [first, second] => {
+            format!("Invalid number of components ({components}, expected {first} or {second}).")
+        }
+        _ => format!("Invalid number of components ({components})."),
+    }
+}
+
+fn c_string_or_unknown(value: *const c_char) -> String {
+    if value.is_null() {
+        return "Unknown".to_owned();
+    }
+
+    unsafe { std::ffi::CStr::from_ptr(value) }
+        .to_string_lossy()
+        .into_owned()
+}
+
+pub(crate) unsafe fn generic_mnote_value(
+    format: ExifFormat,
+    components: u64,
+    data: *const c_uchar,
+    size: usize,
+    order: ExifByteOrder,
+    buffer: *mut c_char,
+    maxlen: c_uint,
+) -> *mut c_char {
+    if data.is_null() && size != 0 {
+        return ptr::null_mut();
+    }
+    if !unsafe { zero_buffer(buffer, maxlen) } {
+        return ptr::null_mut();
+    }
+
+    let mut rendered = String::new();
+    let mut data = data;
+    let mut remaining = size;
+
+    match format {
+        EXIF_FORMAT_ASCII => {
+            let bytes = if data.is_null() {
+                &[]
+            } else {
+                unsafe { std::slice::from_raw_parts(data, size) }
+            };
+            let end = bytes
+                .iter()
+                .position(|byte| *byte == 0)
+                .unwrap_or(bytes.len());
+            return unsafe { write_slice_to_buffer(buffer, maxlen, &bytes[..end]) };
+        }
+        EXIF_FORMAT_SHORT => {
+            for _ in 0..components {
+                if remaining < 2 {
+                    break;
+                }
+                let _ = write!(&mut rendered, "{} ", unsafe { exif_get_short(data, order) });
+                data = unsafe { data.add(2) };
+                remaining -= 2;
+            }
+        }
+        EXIF_FORMAT_SSHORT => {
+            for _ in 0..components {
+                if remaining < 2 {
+                    break;
+                }
+                let _ = write!(&mut rendered, "{} ", unsafe {
+                    exif_get_sshort(data, order)
+                });
+                data = unsafe { data.add(2) };
+                remaining -= 2;
+            }
+        }
+        EXIF_FORMAT_LONG => {
+            for _ in 0..components {
+                if remaining < 4 {
+                    break;
+                }
+                let _ = write!(&mut rendered, "{} ", unsafe { exif_get_long(data, order) });
+                data = unsafe { data.add(4) };
+                remaining -= 4;
+            }
+        }
+        EXIF_FORMAT_SLONG => {
+            for _ in 0..components {
+                if remaining < 4 {
+                    break;
+                }
+                let _ = write!(&mut rendered, "{} ", unsafe { exif_get_slong(data, order) });
+                data = unsafe { data.add(4) };
+                remaining -= 4;
+            }
+        }
+        EXIF_FORMAT_RATIONAL => {
+            if components > 0
+                && remaining >= exif_format_get_size_impl(EXIF_FORMAT_RATIONAL) as usize
+            {
+                let value = unsafe { exif_get_rational(data, order) };
+                if value.denominator == 0 {
+                    rendered.push_str("Unknown");
+                } else {
+                    let _ = write!(
+                        &mut rendered,
+                        "{:.4}",
+                        value.numerator as f64 / value.denominator as f64
+                    );
+                }
+            }
+        }
+        EXIF_FORMAT_SRATIONAL => {
+            if components > 0
+                && remaining >= exif_format_get_size_impl(EXIF_FORMAT_SRATIONAL) as usize
+            {
+                let value = unsafe { exif_get_srational(data, order) };
+                if value.denominator == 0 {
+                    rendered.push_str("Unknown");
+                } else {
+                    let _ = write!(
+                        &mut rendered,
+                        "{:.4}",
+                        value.numerator as f64 / value.denominator as f64
+                    );
+                }
+            }
+        }
+        _ => {
+            let _ = write!(&mut rendered, "{} bytes unknown data", size);
+        }
+    }
+
+    unsafe { write_str_to_buffer(buffer, maxlen, &rendered) }
 }
