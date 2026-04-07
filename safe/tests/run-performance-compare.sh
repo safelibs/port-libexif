@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+phase_id=impl_01_abi_packaging
 script_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 safe_dir=$(cd "$script_dir/.." && pwd)
 repo_root=$(cd "$safe_dir/.." && pwd)
@@ -11,7 +12,7 @@ source "$script_dir/perf/thresholds.env"
 fixture_root="$script_dir/testdata"
 manifest="$script_dir/perf/fixture-manifest.txt"
 original_so="$repo_root/original/libexif/.libs/libexif.so.12.3.4"
-package_root=${PACKAGE_BUILD_ROOT:-$(mktemp -d "${TMPDIR:-/tmp}/libexif-perf.XXXXXX")}
+package_root=${PACKAGE_BUILD_ROOT:-"$safe_dir/.artifacts/$phase_id"}
 perf_root="$package_root/perf"
 driver="$perf_root/bench-driver"
 safe_overlay="$package_root/root"

@@ -1,12 +1,13 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+phase_id=impl_01_abi_packaging
 script_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 safe_dir=$(cd "$script_dir/.." && pwd)
 repo_root=$(cd "$safe_dir/.." && pwd)
 multiarch=$(dpkg-architecture -qDEB_HOST_MULTIARCH)
 
-package_root=${PACKAGE_BUILD_ROOT:-$(mktemp -d "${TMPDIR:-/tmp}/libexif-export.XXXXXX")}
+package_root=${PACKAGE_BUILD_ROOT:-"$safe_dir/.artifacts/$phase_id"}
 PACKAGE_BUILD_ROOT="$package_root" "$script_dir/run-package-build.sh" >/dev/null
 
 library="$package_root/root/usr/lib/$multiarch/libexif.so.12.3.4"
