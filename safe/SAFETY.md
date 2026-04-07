@@ -19,6 +19,41 @@ build. Apple, Canon, Fuji, Olympus, and Pentax MakerNote parsing and
 formatting now live in `src/mnote/*.rs`. The remaining foreign surface is
 limited to the variadic logging shim plus libc/gettext calls.
 
+## Interpreting the raw audit output
+
+The `rg -l '\bunsafe\b' ...` command intentionally over-approximates. Some
+hits are audit markers rather than additional unsafe implementation blocks.
+
+### 0. FFI type definitions and safe export attributes
+
+Files:
+
+- `src/ffi/types.rs`
+- `src/primitives/byte_order.rs`
+- `src/primitives/format.rs`
+- `src/primitives/ifd.rs`
+- `src/tables/data_options.rs`
+- `src/tables/tag_table.rs`
+
+Why they appear:
+
+- `src/ffi/types.rs` uses `unsafe extern "C" fn` in callback, allocator, and
+  vtable type definitions because those function pointers describe C ABI
+  slots whose implementations may dereference caller-controlled pointers.
+- The getter modules still contain `#[unsafe(no_mangle)]` because Rust treats
+  symbol export as an unsafe attribute even when the exported function itself
+  is safe to call.
+
+Current guardrails:
+
+- `src/primitives/byte_order.rs`, `src/primitives/format.rs`,
+  `src/primitives/ifd.rs`, `src/tables/data_options.rs`, and the enum/index
+  getters in `src/tables/tag_table.rs` now expose safe `extern "C"` functions
+  because they do not dereference caller-provided pointers.
+- The pointer-bearing callback and allocator signatures in `src/ffi/types.rs`
+  stay explicitly unsafe so the ABI contract remains visible at the type
+  level.
+
 ## Remaining `unsafe` categories
 
 ### 1. Exported C ABI entry points that accept caller-owned pointers
