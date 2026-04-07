@@ -292,9 +292,9 @@ pub(crate) fn tag_title_from_table(table: &[TagInfo], tag: c_int) -> *const c_ch
 }
 
 pub(crate) fn tag_description_from_table(table: &[TagInfo], tag: c_int) -> *const c_char {
-    find_tag_info(table, tag)
-        .and_then(|entry| entry.description)
-        .map_or(ptr::null(), gettext_or_empty)
+    find_tag_info(table, tag).map_or(ptr::null(), |entry| {
+        entry.description.map_or_else(|| gettext(empty_message()), gettext_or_empty)
+    })
 }
 
 fn gettext_or_empty(message: Message) -> *const c_char {

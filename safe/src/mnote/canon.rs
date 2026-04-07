@@ -1111,6 +1111,12 @@ const CANON_TAGS: &[TagInfo] = &[
         title: Some(message(b"Raw Burst Info\0")),
         description: Some(empty_message()),
     },
+    TagInfo {
+        tag: 0,
+        name: None,
+        title: None,
+        description: Some(empty_message()),
+    },
 ];
 
 fn canon_tag_name_impl(tag: MnoteCanonTag) -> *const c_char {
