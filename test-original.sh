@@ -2,7 +2,7 @@
 set -euo pipefail
 
 ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
-PHASE_ID="impl_07_downstream_gui_services"
+PHASE_ID="impl_09_final_release"
 IMAGE_LABEL_KEY="io.safelibs.libexif.image-inputs-sha256"
 IMAGE_TAG="${LIBEXIF_ORIGINAL_TEST_IMAGE:-libexif-original-test:${PHASE_ID}}"
 DOWNSTREAM_PACKAGE_ROOT="${LIBEXIF_DOWNSTREAM_PACKAGE_ROOT:-$ROOT/safe/.artifacts/${PHASE_ID}}"

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-phase_id=impl_08_safety_perf_docs
+phase_id=impl_09_final_release
 script_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 safe_dir=$(cd "$script_dir/.." && pwd)
 repo_root=$(cd "$safe_dir/.." && pwd)

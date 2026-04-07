@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-phase_id=impl_08_safety_perf_docs
+phase_id=impl_09_final_release
 script_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 safe_dir=$(cd "$script_dir/.." && pwd)
 repo_root=$(cd "$safe_dir/.." && pwd)
@@ -31,6 +31,13 @@ EOF
 
 print_package_input_paths() {
     printf '%s\n' \
+        original/configure.ac \
+        original/debian/libexif12.symbols \
+        original/libexif/Makefile.am \
+        original/libexif/libexif.sym \
+        original/libexif/exif-tag.c \
+        original/test/Makefile.am \
+        original/contrib/examples/Makefile.am \
         safe/Cargo.toml \
         safe/Cargo.lock \
         safe/build.rs \
@@ -56,10 +63,22 @@ print_package_input_paths() {
     find "$safe_dir/doc/libexif-api.html" -type f -printf 'safe/doc/libexif-api.html/%P\n'
     find "$safe_dir/tests/support" -type f -printf 'safe/tests/support/%P\n'
 
-    printf '%s\n' \
-        original/libexif/libexif.sym \
-        original/libexif/exif-tag.c
     find "$repo_root/original/libexif" -maxdepth 1 -type f -name '*.h' -printf 'original/libexif/%f\n'
+    while IFS= read -r vendor; do
+        find "$repo_root/original/libexif/$vendor" -maxdepth 1 -type f \
+            \( -name '*.c' -o -name '*.h' \) \
+            -printf "original/libexif/$vendor/%f\n"
+    done <<'EOF'
+apple
+canon
+fuji
+olympus
+pentax
+EOF
+    find "$repo_root/original/test" -maxdepth 1 -type f -name '*.o' -printf 'original/test/%f\n'
+    find "$repo_root/original/contrib/examples" -maxdepth 1 -type f -name '*.o' -printf 'original/contrib/examples/%f\n'
+    find "$repo_root/original/test/nls" -maxdepth 1 -type f -name 'print-localedir.o' \
+        -printf 'original/test/nls/%f\n'
 }
 
 move_artifact() {
