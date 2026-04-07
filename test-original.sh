@@ -2,61 +2,82 @@
 set -euo pipefail
 
 ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
-IMAGE_TAG="${LIBEXIF_ORIGINAL_TEST_IMAGE:-libexif-original-test:ubuntu24.04}"
+PHASE_ID="impl_05_downstream_compile"
+IMAGE_LABEL_KEY="io.safelibs.libexif.image-inputs-sha256"
+IMAGE_TAG="${LIBEXIF_ORIGINAL_TEST_IMAGE:-libexif-original-test:${PHASE_ID}}"
+DOWNSTREAM_PACKAGE_ROOT="${LIBEXIF_DOWNSTREAM_PACKAGE_ROOT:-$ROOT/safe/.artifacts/${PHASE_ID}}"
+MODE="all"
 ONLY=""
+PRINT_IMAGE_INPUTS_SHA256=0
 
 usage() {
   cat <<'EOF'
-usage: test-original.sh [--only <dependent-name>]
+usage: test-original.sh [--mode compile|runtime|all] [--only <dependent-name>] [--print-image-inputs-sha256]
 
-Builds the local Debian packages from ./safe inside an Ubuntu 24.04 Docker
-container, installs them, and smoke-tests the dependent software recorded in
-dependents.json. The safe package build still stages the vendored ./original
-tree alongside ./safe because the Rust build reuses those helper sources.
+Builds or reuses the phase-local safe libexif package root under ./safe/.artifacts,
+builds or reuses the downstream Ubuntu 24.04 Docker image, installs the safe
+packages from that validated package root inside the container, and exercises
+the downstream compatibility matrix recorded in dependents.json.
 
---only runs just one dependent by exact .dependents[].name.
+--mode compile builds each downstream source package and records compile-matrix.tsv.
+--mode runtime runs runtime-capable downstream probes and records runtime-matrix.tsv.
+--mode all runs the full compile matrix first and then the runtime matrix.
+--only runs just one dependent by exact .dependents[].name and writes logs under
+       downstream/only/<mode>/<name>/ without refreshing the full summary files.
+--print-image-inputs-sha256 prints the current Docker image input digest and exits.
 EOF
 }
 
-while (($#)); do
-  case "$1" in
-    --only)
-      ONLY="${2:?missing value for --only}"
-      shift 2
-      ;;
-    --help|-h)
-      usage
-      exit 0
-      ;;
-    *)
-      printf 'unknown option: %s\n' "$1" >&2
-      usage >&2
-      exit 1
-      ;;
-  esac
-done
+print_image_input_paths() {
+  printf '%s\n' \
+    test-original.sh \
+    dependents.json
 
-command -v docker >/dev/null 2>&1 || {
-  echo "docker is required to run $0" >&2
-  exit 1
+  if [[ -d "$ROOT/safe/tests/downstream" ]]; then
+    find "$ROOT/safe/tests/downstream" -type f -printf 'safe/tests/downstream/%P\n'
+  fi
 }
 
-[[ -d "$ROOT/safe" ]] || {
-  echo "missing safe source tree" >&2
-  exit 1
+print_image_inputs_manifest() {
+  (
+    cd "$ROOT"
+    while IFS= read -r relpath; do
+      [[ -n "$relpath" ]] || continue
+      [[ -f "$relpath" ]] || {
+        printf 'missing image input: %s\n' "$relpath" >&2
+        exit 1
+      }
+      sha256sum "$relpath"
+    done < <(print_image_input_paths | LC_ALL=C sort -u)
+  )
 }
 
-[[ -d "$ROOT/original" ]] || {
-  echo "missing original helper source tree" >&2
-  exit 1
+current_image_inputs_sha256() {
+  local manifest
+
+  manifest="$(mktemp)"
+  print_image_inputs_manifest >"$manifest"
+  sha256sum "$manifest" | awk '{print $1}'
+  rm -f "$manifest"
 }
 
-[[ -f "$ROOT/dependents.json" ]] || {
-  echo "missing dependents.json" >&2
-  exit 1
+get_image_label_value() {
+  docker image inspect "$IMAGE_TAG" \
+    --format "{{ index .Config.Labels \"$IMAGE_LABEL_KEY\" }}" 2>/dev/null || true
 }
 
-docker build -t "$IMAGE_TAG" - <<'DOCKERFILE'
+image_is_fresh() {
+  local actual
+
+  actual="$(get_image_label_value)"
+  [[ -n "$actual" && "$actual" == "$IMAGE_INPUTS_SHA256" ]]
+}
+
+build_image() {
+  docker build \
+    --label "$IMAGE_LABEL_KEY=$IMAGE_INPUTS_SHA256" \
+    -t "$IMAGE_TAG" \
+    - <<'DOCKERFILE'
 FROM ubuntu:24.04
 
 ARG DEBIAN_FRONTEND=noninteractive
@@ -114,10 +135,103 @@ RUN sed -i 's/^Types: deb$/Types: deb deb-src/' /etc/apt/sources.list.d/ubuntu.s
  && rustc --version \
  && rm -rf /var/lib/apt/lists/*
 DOCKERFILE
+}
+
+ensure_image() {
+  if image_is_fresh; then
+    return 0
+  fi
+
+  if [[ ${LIBEXIF_REQUIRE_REUSE:-0} == 1 ]]; then
+    echo "reuse-required docker image is missing or stale" >&2
+    exit 1
+  fi
+
+  build_image
+  image_is_fresh || {
+    echo "failed to validate docker image freshness label" >&2
+    exit 1
+  }
+}
+
+ensure_workspace_inputs() {
+  [[ -d "$ROOT/safe" ]] || {
+    echo "missing safe source tree" >&2
+    exit 1
+  }
+
+  [[ -d "$ROOT/original" ]] || {
+    echo "missing original helper source tree" >&2
+    exit 1
+  }
+
+  [[ -f "$ROOT/dependents.json" ]] || {
+    echo "missing dependents.json" >&2
+    exit 1
+  }
+}
+
+while (($#)); do
+  case "$1" in
+    --mode)
+      MODE="${2:?missing value for --mode}"
+      shift 2
+      ;;
+    --only)
+      ONLY="${2:?missing value for --only}"
+      shift 2
+      ;;
+    --print-image-inputs-sha256)
+      PRINT_IMAGE_INPUTS_SHA256=1
+      shift
+      ;;
+    --help|-h)
+      usage
+      exit 0
+      ;;
+    *)
+      printf 'unknown option: %s\n' "$1" >&2
+      usage >&2
+      exit 1
+      ;;
+  esac
+done
+
+case "$MODE" in
+  compile|runtime|all)
+    ;;
+  *)
+    printf 'invalid --mode: %s\n' "$MODE" >&2
+    usage >&2
+    exit 1
+    ;;
+esac
+
+ensure_workspace_inputs
+IMAGE_INPUTS_SHA256="$(current_image_inputs_sha256)"
+
+if [[ "$PRINT_IMAGE_INPUTS_SHA256" == 1 ]]; then
+  printf '%s\n' "$IMAGE_INPUTS_SHA256"
+  exit 0
+fi
+
+command -v docker >/dev/null 2>&1 || {
+  echo "docker is required to run $0" >&2
+  exit 1
+}
+
+ensure_image
+PACKAGE_BUILD_ROOT="$DOWNSTREAM_PACKAGE_ROOT" bash "$ROOT/safe/tests/run-package-build.sh" >/dev/null
+mkdir -p "$DOWNSTREAM_PACKAGE_ROOT/downstream"
 
 docker run --rm -i \
   -e "LIBEXIF_TEST_ONLY=$ONLY" \
+  -e "LIBEXIF_TEST_MODE=$MODE" \
+  -e "LIBEXIF_DOWNSTREAM_PACKAGE_ROOT_MOUNT=/package-root" \
+  -e "LIBEXIF_DOWNSTREAM_OUTPUT_ROOT=/downstream" \
   -v "$ROOT":/work:ro \
+  -v "$DOWNSTREAM_PACKAGE_ROOT":/package-root:ro \
+  -v "$DOWNSTREAM_PACKAGE_ROOT/downstream":/downstream \
   "$IMAGE_TAG" \
   bash -s <<'CONTAINER_SCRIPT'
 set -euo pipefail
@@ -125,15 +239,19 @@ set -euo pipefail
 export LANG=C.UTF-8
 export LC_ALL=C.UTF-8
 export DEBIAN_FRONTEND=noninteractive
+umask 022
 
 ROOT=/work
+MODE="${LIBEXIF_TEST_MODE:-all}"
 ONLY_FILTER="${LIBEXIF_TEST_ONLY:-}"
+PACKAGE_ROOT="${LIBEXIF_DOWNSTREAM_PACKAGE_ROOT_MOUNT:-/package-root}"
+DOWNSTREAM_ROOT="${LIBEXIF_DOWNSTREAM_OUTPUT_ROOT:-/downstream}"
 MULTIARCH="$(dpkg-architecture -qDEB_HOST_MULTIARCH)"
-SOURCE_ROOT=/tmp/libexif-safe-src
-SOURCE_COPY="$SOURCE_ROOT/safe"
-ORIGINAL_HELPER_COPY="$SOURCE_ROOT/original"
+SOURCE_BUILD_ROOT=/tmp/libexif-downstream-builds
 FIXTURE_ROOT=/tmp/libexif-fixtures
-TEST_ROOT=/tmp/libexif-dependent-tests
+PACKAGE_ARTIFACTS_DIR="$PACKAGE_ROOT/artifacts"
+PACKAGE_RUNTIME_ROOT="$PACKAGE_ROOT/libexif12"
+PACKAGE_OVERLAY_ROOT="$PACKAGE_ROOT/root"
 FUJI_FIXTURE="$ROOT/safe/tests/testdata/fuji_makernote_variant_1.jpg"
 GENERATED_FIXTURE="$FIXTURE_ROOT/generated-exif.jpg"
 GPS_FIXTURE="$FIXTURE_ROOT/generated-gps.jpg"
@@ -141,10 +259,22 @@ GPHOTO_FIXTURE_DIR="$FIXTURE_ROOT/gphoto-camera"
 EOG_PLUGIN_DIR="/usr/lib/$MULTIARCH/eog/plugins"
 RUBY_VENDORARCHDIR="$(ruby -rrbconfig -e 'print RbConfig::CONFIG["vendorarchdir"]')"
 ACTIVE_LIBEXIF=""
+ACTIVE_LIBEXIF_PACKAGE_FILE=""
 PACKAGE_RUNTIME_DEB=""
 PACKAGE_DEV_DEB=""
+PACKAGE_DOC_DEB=""
 PACKAGE_RUNTIME_VERSION=""
 PACKAGE_DEV_VERSION=""
+RUN_SCOPE="full"
+COMPILE_MATRIX_PATH="$DOWNSTREAM_ROOT/compile-matrix.tsv"
+RUNTIME_MATRIX_PATH="$DOWNSTREAM_ROOT/runtime-matrix.tsv"
+CURRENT_ASSERTION=""
+CURRENT_ARTIFACT=""
+APT_UPDATED=0
+
+if [[ -n "$ONLY_FILTER" ]]; then
+  RUN_SCOPE="only"
+fi
 
 declare -a REQUIRED_DEPENDENTS=(
   "exif"
@@ -163,9 +293,12 @@ declare -a REQUIRED_DEPENDENTS=(
   "CamlImages"
   "ImageMagick"
 )
+declare -A SOURCE_BUILD_DIRS=()
+declare -A SOURCE_SOURCE_DIRS=()
+declare -A SOURCE_LOG_DIRS=()
 
 log_step() {
-  printf '\n==> %s\n' "$1"
+  printf '\n==> %s\n' "$1" >&2
 }
 
 die() {
@@ -209,13 +342,54 @@ should_run() {
   [[ -z "$ONLY_FILTER" || "$name" == "$ONLY_FILTER" ]]
 }
 
-reset_test_dir() {
+is_runtime_dependent() {
   local name="$1"
-  local dir="$TEST_ROOT/$name"
+
+  jq -e --arg name "$name" \
+    '.dependents[] | select(.name == $name and .runtime_functionality != null)' \
+    "$ROOT/dependents.json" >/dev/null
+}
+
+source_package_for_name() {
+  local name="$1"
+
+  jq -r --arg name "$name" \
+    '.dependents[] | select(.name == $name) | .source_package' \
+    "$ROOT/dependents.json"
+}
+
+relative_downstream_path() {
+  local path="$1"
+
+  printf '%s\n' "${path#"$DOWNSTREAM_ROOT"/}"
+}
+
+reset_test_dir() {
+  local mode="$1"
+  local name="$2"
+  local dir="$DOWNSTREAM_ROOT/$RUN_SCOPE/$mode/$name"
 
   rm -rf "$dir"
   mkdir -p "$dir"
   printf '%s\n' "$dir"
+}
+
+compile_source_log_dir() {
+  local source_package="$1"
+
+  if [[ -n "$ONLY_FILTER" ]]; then
+    printf '%s\n' "$DOWNSTREAM_ROOT/only/compile/$ONLY_FILTER/sources/$source_package"
+  else
+    printf '%s\n' "$DOWNSTREAM_ROOT/full/compile/sources/$source_package"
+  fi
+}
+
+compile_shared_dir() {
+  if [[ -n "$ONLY_FILTER" ]]; then
+    printf '%s\n' "$DOWNSTREAM_ROOT/only/compile/$ONLY_FILTER/shared"
+  else
+    printf '%s\n' "$DOWNSTREAM_ROOT/full/compile/shared"
+  fi
 }
 
 assert_status_equals() {
@@ -257,73 +431,58 @@ insert_block_before_marker() {
 }
 
 validate_dependents() {
-  local expected_count actual_count matched=0
-  local name
+  local expected_count index
+  local matched=0
+  local -a actual_names
 
+  mapfile -t actual_names < <(jq -r '.dependents[].name' "$ROOT/dependents.json")
   expected_count="${#REQUIRED_DEPENDENTS[@]}"
-  actual_count="$(jq -r '.dependents | length' "$ROOT/dependents.json")"
-  [[ "$actual_count" == "$expected_count" ]] || {
-    printf 'dependents.json count mismatch: expected %s, found %s\n' "$expected_count" "$actual_count" >&2
+  [[ "${#actual_names[@]}" -eq "$expected_count" ]] || {
+    printf 'dependents.json count mismatch: expected %s, found %s\n' \
+      "$expected_count" "${#actual_names[@]}" >&2
     exit 1
   }
 
-  for name in "${REQUIRED_DEPENDENTS[@]}"; do
-    jq -e --arg name "$name" '.dependents[] | select(.name == $name)' "$ROOT/dependents.json" >/dev/null
+  for ((index = 0; index < expected_count; index++)); do
+    [[ "${actual_names[$index]}" == "${REQUIRED_DEPENDENTS[$index]}" ]] || {
+      printf 'dependents.json order mismatch at index %s: expected %s, found %s\n' \
+        "$index" "${REQUIRED_DEPENDENTS[$index]}" "${actual_names[$index]}" >&2
+      exit 1
+    }
   done
 
   if [[ -n "$ONLY_FILTER" ]]; then
-    matched=0
-    for name in "${REQUIRED_DEPENDENTS[@]}"; do
-      if [[ "$name" == "$ONLY_FILTER" ]]; then
+    for index in "${!REQUIRED_DEPENDENTS[@]}"; do
+      if [[ "${REQUIRED_DEPENDENTS[$index]}" == "$ONLY_FILTER" ]]; then
         matched=1
         break
       fi
     done
     [[ "$matched" -eq 1 ]] || die "unknown dependent for --only: $ONLY_FILTER"
   fi
-}
 
-build_safe_packages() {
-  local runtime_matches dev_matches
-
-  log_step "Building safe libexif Debian packages"
-
-  rm -rf "$SOURCE_ROOT"
-  mkdir -p "$SOURCE_ROOT"
-  cp -a "$ROOT/safe" "$SOURCE_COPY"
-  cp -a "$ROOT/original" "$ORIGINAL_HELPER_COPY"
-
-  if ! (
-    cd "$SOURCE_COPY"
-    dpkg-buildpackage -us -uc -b >/tmp/libexif-build.log 2>&1
-  ); then
-    cat /tmp/libexif-build.log >&2
-    exit 1
+  if [[ "$MODE" == "runtime" && -n "$ONLY_FILTER" ]] && ! is_runtime_dependent "$ONLY_FILTER"; then
+    die "runtime mode is not supported for $ONLY_FILTER"
   fi
-
-  runtime_matches="$(find "$SOURCE_ROOT" -maxdepth 1 -type f -name 'libexif12_*.deb' | LC_ALL=C sort)"
-  dev_matches="$(find "$SOURCE_ROOT" -maxdepth 1 -type f -name 'libexif-dev_*.deb' | LC_ALL=C sort)"
-
-  [[ "$(printf '%s\n' "$runtime_matches" | sed '/^$/d' | wc -l)" -eq 1 ]] || die "expected exactly one libexif12 Debian package"
-  [[ "$(printf '%s\n' "$dev_matches" | sed '/^$/d' | wc -l)" -eq 1 ]] || die "expected exactly one libexif-dev Debian package"
-
-  PACKAGE_RUNTIME_DEB="$(printf '%s\n' "$runtime_matches" | head -n1)"
-  PACKAGE_DEV_DEB="$(printf '%s\n' "$dev_matches" | head -n1)"
-  PACKAGE_RUNTIME_VERSION="$(dpkg-deb -f "$PACKAGE_RUNTIME_DEB" Version)"
-  PACKAGE_DEV_VERSION="$(dpkg-deb -f "$PACKAGE_DEV_DEB" Version)"
-
-  printf 'PACKAGE_RUNTIME_DEB=%s\n' "$PACKAGE_RUNTIME_DEB"
-  printf 'PACKAGE_DEV_DEB=%s\n' "$PACKAGE_DEV_DEB"
-  printf 'PACKAGE_RUNTIME_VERSION=%s\n' "$PACKAGE_RUNTIME_VERSION"
-  printf 'PACKAGE_DEV_VERSION=%s\n' "$PACKAGE_DEV_VERSION"
 }
 
 install_safe_packages() {
-  local extract_dir deb_lib
+  local deb_lib
 
-  log_step "Installing safe libexif Debian packages"
+  log_step "Installing safe libexif Debian packages from $PACKAGE_ROOT"
 
-  dpkg -i "$PACKAGE_RUNTIME_DEB" "$PACKAGE_DEV_DEB" >/tmp/libexif-install.log 2>&1 || {
+  PACKAGE_RUNTIME_DEB="$(find "$PACKAGE_ARTIFACTS_DIR" -maxdepth 1 -type f -name 'libexif12_*_*.deb' | LC_ALL=C sort | head -n1)"
+  PACKAGE_DEV_DEB="$(find "$PACKAGE_ARTIFACTS_DIR" -maxdepth 1 -type f -name 'libexif-dev_*_*.deb' | LC_ALL=C sort | head -n1)"
+  PACKAGE_DOC_DEB="$(find "$PACKAGE_ARTIFACTS_DIR" -maxdepth 1 -type f -name 'libexif-doc_*_*.deb' | LC_ALL=C sort | head -n1)"
+
+  [[ -n "$PACKAGE_RUNTIME_DEB" ]] || die "missing libexif12 package under $PACKAGE_ARTIFACTS_DIR"
+  [[ -n "$PACKAGE_DEV_DEB" ]] || die "missing libexif-dev package under $PACKAGE_ARTIFACTS_DIR"
+  [[ -n "$PACKAGE_DOC_DEB" ]] || die "missing libexif-doc package under $PACKAGE_ARTIFACTS_DIR"
+
+  PACKAGE_RUNTIME_VERSION="$(dpkg-deb -f "$PACKAGE_RUNTIME_DEB" Version)"
+  PACKAGE_DEV_VERSION="$(dpkg-deb -f "$PACKAGE_DEV_DEB" Version)"
+
+  dpkg -i "$PACKAGE_RUNTIME_DEB" "$PACKAGE_DEV_DEB" "$PACKAGE_DOC_DEB" >/tmp/libexif-install.log 2>&1 || {
     cat /tmp/libexif-install.log >&2
     exit 1
   }
@@ -336,13 +495,136 @@ install_safe_packages() {
   [[ -n "$ACTIVE_LIBEXIF" ]] || die "unable to locate active libexif.so.12 via ldconfig"
   ACTIVE_LIBEXIF="$(readlink -f "$ACTIVE_LIBEXIF")"
 
-  extract_dir="$(mktemp -d)"
-  dpkg-deb -x "$PACKAGE_RUNTIME_DEB" "$extract_dir"
-  deb_lib="$(find "$extract_dir" -type f -path '*/libexif.so.12*' | LC_ALL=C sort | head -n1)"
-  [[ -n "$deb_lib" ]] || die "unable to locate libexif.so.12 inside built runtime package"
-  cmp -s "$ACTIVE_LIBEXIF" "$deb_lib" || die "installed libexif.so.12 does not match the locally built package payload"
+  ACTIVE_LIBEXIF_PACKAGE_FILE="$(readlink -f "$PACKAGE_RUNTIME_ROOT/usr/lib/$MULTIARCH/libexif.so.12")"
+  [[ -f "$ACTIVE_LIBEXIF_PACKAGE_FILE" ]] || die "unable to locate package-root libexif.so.12"
+  cmp -s "$ACTIVE_LIBEXIF" "$ACTIVE_LIBEXIF_PACKAGE_FILE" || die "installed libexif.so.12 does not match the validated package-root payload"
+
+  deb_lib="$(find "$PACKAGE_RUNTIME_ROOT" -type f -path '*/libexif.so.12*' | LC_ALL=C sort | head -n1)"
+  [[ -n "$deb_lib" ]] || die "unable to locate libexif.so.12 inside validated package root"
 
   printf 'ACTIVE_LIBEXIF=%s\n' "$ACTIVE_LIBEXIF"
+}
+
+prepare_source_build_environment() {
+  local shared_dir
+
+  if [[ "$APT_UPDATED" -eq 1 ]]; then
+    return 0
+  fi
+
+  shared_dir="$(compile_shared_dir)"
+  mkdir -p "$shared_dir" "$SOURCE_BUILD_ROOT"
+  apt-get update >"$shared_dir/apt-update.log" 2>&1 || {
+    cat "$shared_dir/apt-update.log" >&2
+    exit 1
+  }
+  APT_UPDATED=1
+}
+
+build_source_package() {
+  local source_package="$1"
+  local build_dir log_dir srcdir
+
+  if [[ -n "${SOURCE_BUILD_DIRS[$source_package]:-}" ]]; then
+    return 0
+  fi
+
+  prepare_source_build_environment
+  build_dir="$(mktemp -d "$SOURCE_BUILD_ROOT/${source_package}.XXXXXX")"
+  log_dir="$(compile_source_log_dir "$source_package")"
+
+  rm -rf "$log_dir"
+  mkdir -p "$log_dir"
+
+  log_step "Building downstream source package $source_package"
+
+  apt-get build-dep -y --no-install-recommends "$source_package" >"$log_dir/builddep.log" 2>&1 || {
+    cat "$log_dir/builddep.log" >&2
+    exit 1
+  }
+
+  (
+    cd "$build_dir"
+    apt-get source "$source_package" >"$log_dir/source.log" 2>&1
+  ) || {
+    cat "$log_dir/source.log" >&2
+    exit 1
+  }
+
+  srcdir="$(find "$build_dir" -maxdepth 1 -mindepth 1 -type d -name "${source_package}-*" | LC_ALL=C sort | head -n1)"
+  if [[ -z "$srcdir" ]]; then
+    srcdir="$(find "$build_dir" -maxdepth 1 -mindepth 1 -type d | LC_ALL=C sort | head -n1)"
+  fi
+  [[ -n "$srcdir" ]] || die "failed to unpack source package $source_package"
+
+  if ! (
+    cd "$srcdir"
+    DEB_BUILD_OPTIONS='nocheck noautodbgsym nostrip' dpkg-buildpackage -us -uc -b >"$log_dir/build.log" 2>&1
+  ); then
+    cat "$log_dir/build.log" >&2
+    exit 1
+  fi
+
+  find "$build_dir" -maxdepth 1 -type f \
+    \( -name '*.deb' -o -name '*.ddeb' -o -name '*.buildinfo' -o -name '*.changes' \) \
+    | LC_ALL=C sort >"$log_dir/packages.txt"
+  require_nonempty_file "$log_dir/packages.txt"
+
+  SOURCE_BUILD_DIRS["$source_package"]="$build_dir"
+  SOURCE_SOURCE_DIRS["$source_package"]="$srcdir"
+  SOURCE_LOG_DIRS["$source_package"]="$log_dir"
+}
+
+find_built_deb() {
+  local outvar="$1"
+  local source_package="$2"
+  local pattern="$3"
+  local match
+
+  build_source_package "$source_package"
+  match="$(find "${SOURCE_BUILD_DIRS[$source_package]}" -maxdepth 1 -type f -name "$pattern" | LC_ALL=C sort | head -n1)"
+  [[ -n "$match" ]] || die "failed to find built package for $source_package matching $pattern"
+  printf -v "$outvar" '%s' "$match"
+}
+
+find_extracted_artifact() {
+  local outvar="$1"
+  local root="$2"
+  local pattern="$3"
+  local match
+
+  match="$(find "$root" -type f -path "$pattern" | LC_ALL=C sort | head -n1)"
+  [[ -n "$match" ]] || die "failed to find extracted artifact matching $pattern"
+  printf -v "$outvar" '%s' "$match"
+}
+
+assert_deb_artifact_uses_safe_libexif() {
+  local source_package="$1"
+  local deb_pattern="$2"
+  local artifact_pattern="$3"
+  local dir="$4"
+  local assertion="$5"
+  local deb extract_root artifact
+
+  find_built_deb deb "$source_package" "$deb_pattern"
+  extract_root="$(mktemp -d)"
+  dpkg-deb -x "$deb" "$extract_root"
+  find_extracted_artifact artifact "$extract_root" "$artifact_pattern"
+  ldd "$artifact" >"$dir/ldd.txt"
+  assert_binary_uses_active_libexif "$artifact"
+  CURRENT_ASSERTION="$assertion"
+  CURRENT_ARTIFACT="$(basename "$deb"):${artifact#"$extract_root"}"
+}
+
+assert_deb_exists() {
+  local source_package="$1"
+  local deb_pattern="$2"
+  local assertion="$3"
+  local deb
+
+  find_built_deb deb "$source_package" "$deb_pattern"
+  CURRENT_ASSERTION="$assertion"
+  CURRENT_ARTIFACT="$(basename "$deb")"
 }
 
 build_fixture_writer() {
@@ -567,8 +849,8 @@ create_test_fixtures() {
 
   log_step "Creating test fixtures"
 
-  rm -rf "$FIXTURE_ROOT" "$TEST_ROOT"
-  mkdir -p "$FIXTURE_ROOT" "$GPHOTO_FIXTURE_DIR" "$TEST_ROOT"
+  rm -rf "$FIXTURE_ROOT"
+  mkdir -p "$FIXTURE_ROOT" "$GPHOTO_FIXTURE_DIR"
 
   convert -size 8x6 xc:red "$FIXTURE_ROOT/plain.jpg"
   build_fixture_writer "$fixture_writer_src"
@@ -1417,6 +1699,8 @@ test_exif() {
   exif -m "$GENERATED_FIXTURE" >"$dir/exif.out"
   require_contains "$dir/exif.out" $'Orientation\tRight-top'
   require_contains "$dir/exif.out" $'Date and Time\t2024:01:02 03:04:05'
+  CURRENT_ASSERTION="exif -m reports the generated EXIF orientation and timestamp"
+  CURRENT_ARTIFACT="$(relative_downstream_path "$dir/exif.out")"
 }
 
 test_exiftran() {
@@ -1433,6 +1717,8 @@ test_exiftran() {
 
   require_contains "$dir/after.out" $'Orientation\tTop-left'
   require_contains "$dir/identify.out" 'JPEG 6x8 6x8+0+0'
+  CURRENT_ASSERTION="exiftran -ai normalizes orientation and preserves the rotated JPEG dimensions"
+  CURRENT_ARTIFACT="$(relative_downstream_path "$dir/identify.out")"
 }
 
 test_eog_plugin_exif_display() {
@@ -1440,6 +1726,8 @@ test_eog_plugin_exif_display() {
 
   assert_binary_uses_active_libexif "$EOG_PLUGIN_DIR/libexif-display.so"
   run_eog_exif_display_probe "$GPS_FIXTURE" "$dir/eog-exif-display"
+  CURRENT_ASSERTION="the EXIF Display plugin surfaces camera and timestamp fields inside eog"
+  CURRENT_ARTIFACT="$(relative_downstream_path "$dir/eog-exif-display/exif-display.out")"
 }
 
 test_eog_plugin_map() {
@@ -1453,6 +1741,8 @@ test_eog_plugin_map() {
   require_contains "$dir/gps-exif.out" $'GPS Date\t2024:01:02'
   run_eog_map_probe "$GPS_FIXTURE" "True" "$dir/gps"
   run_eog_map_probe "$GENERATED_FIXTURE" "False" "$dir/no-gps"
+  CURRENT_ASSERTION="the Map plugin enables the jump control only for JPEGs carrying GPS EXIF metadata"
+  CURRENT_ARTIFACT="$(relative_downstream_path "$dir/gps/map-state.out"),$(relative_downstream_path "$dir/no-gps/map-state.out")"
 }
 
 test_tracker_extract() {
@@ -1465,6 +1755,8 @@ test_tracker_extract() {
   require_contains "$dir/tracker.out" 'nie:contentCreated "2024-01-02T03:04:05+0000"'
   require_contains "$dir/tracker.out" 'nfo:orientation nfo:orientation-top'
   require_not_contains "$dir/tracker.err" 'No metadata or extractor modules found'
+  CURRENT_ASSERTION="tracker3 extract indexes GPS coordinates, capture time, model, and orientation from the generated JPEG"
+  CURRENT_ARTIFACT="$(relative_downstream_path "$dir/tracker.out")"
 }
 
 test_shotwell() {
@@ -1474,6 +1766,8 @@ test_shotwell() {
   xvfb-run -a shotwell --show-metadata "$FUJI_FIXTURE" >"$dir/shotwell.out" 2>"$dir/shotwell.err"
   require_contains "$dir/shotwell.out" 'Exif.Image.Model                                                FinePix Z33WP'
   require_contains "$dir/shotwell.out" 'Exif.Photo.PixelXDimension                                      640'
+  CURRENT_ASSERTION="shotwell --show-metadata reports Fuji EXIF model and dimensions"
+  CURRENT_ARTIFACT="$(relative_downstream_path "$dir/shotwell.out")"
 }
 
 test_foxtrotgps() {
@@ -1501,6 +1795,8 @@ test_foxtrotgps() {
   require_contains "$dir/foxtrotgps.out" 'CAMERA=2024:01:02 03:04:05'
   require_not_contains "$dir/foxtrotgps.out" 'symbol lookup error'
   require_not_contains "$dir/foxtrotgps.err" 'symbol lookup error'
+  CURRENT_ASSERTION="FoxtrotGPS loads the generated photo and surfaces its EXIF timestamp without symbol lookup failures"
+  CURRENT_ARTIFACT="$(relative_downstream_path "$dir/foxtrotgps.out")"
 }
 
 test_gphoto2() {
@@ -1512,6 +1808,8 @@ test_gphoto2() {
   require_contains "$dir/gphoto2-exif.out" 'Model               |FinePix Z33WP'
   require_contains "$dir/gphoto2-exif.out" 'DateTimeOriginal    |2009:03:25 03:27:25'
   require_contains "$dir/gphoto2-info.out" "Mime type:   'image/jpeg'"
+  CURRENT_ASSERTION="gphoto2 reads Fuji EXIF metadata from the disk camera backend"
+  CURRENT_ARTIFACT="$(relative_downstream_path "$dir/gphoto2-exif.out")"
 }
 
 test_gtkam() {
@@ -1536,6 +1834,8 @@ test_gtkam() {
   assert_status_equals 0 "${status:-0}" "gtkam"
   require_contains "$dir/gtkam.out" 'ROW|Model|FinePix Z33WP'
   require_contains "$dir/gtkam.out" 'ROW|DateTimeOriginal|2009:03:25 03:27:25'
+  CURRENT_ASSERTION="GTKam opens the Fuji image and displays model and original timestamp rows"
+  CURRENT_ARTIFACT="$(relative_downstream_path "$dir/gtkam.out")"
 }
 
 test_minidlna() {
@@ -1564,6 +1864,8 @@ EOF
   require_nonempty_file "$db_dir/files.db"
   sqlite3 "$db_dir/files.db" "select PATH || '|' || DATE || '|' || MIME from DETAILS where PATH like '%/photo.jpg';" >"$dir/minidlna-sqlite.out"
   require_contains "$dir/minidlna-sqlite.out" 'photo.jpg|2024-01-02T03:04:05|image/jpeg'
+  CURRENT_ASSERTION="MiniDLNA indexes the generated photo with its EXIF-derived capture time"
+  CURRENT_ARTIFACT="$(relative_downstream_path "$dir/minidlna-sqlite.out")"
 }
 
 test_gerbera() {
@@ -1609,6 +1911,8 @@ EOF
   require_contains "$dir/gerbera-metadata.out" 'dc:date=2024-01-02T03:04:05'
   require_contains "$dir/gerbera-metadata.out" 'exif:datetime-original=2024:01:02 03:04:05'
   require_contains "$dir/gerbera-metadata.out" 'exif:model=libexif-gps'
+  CURRENT_ASSERTION="Gerbera imports the generated photo and records EXIF-derived object and metadata fields"
+  CURRENT_ARTIFACT="$(relative_downstream_path "$dir/gerbera-metadata.out")"
 }
 
 test_ruby_exif() {
@@ -1618,6 +1922,8 @@ test_ruby_exif() {
   ruby -rexif -e 'x = Exif.new(ARGV[0]); puts x["Model"]; puts x["Date and Time"]' "$FUJI_FIXTURE" >"$dir/ruby-exif.out"
   require_contains "$dir/ruby-exif.out" 'FinePix Z33WP'
   require_contains "$dir/ruby-exif.out" '2009:03:25 03:27:25'
+  CURRENT_ASSERTION="ruby-exif parses Fuji EXIF model and timestamp fields"
+  CURRENT_ARTIFACT="$(relative_downstream_path "$dir/ruby-exif.out")"
 }
 
 test_libexif_gtk3() {
@@ -1659,6 +1965,8 @@ EOF
   assert_binary_uses_active_libexif "$dir/test-libexif-gtk"
   xvfb-run -a "$dir/test-libexif-gtk" "$FUJI_FIXTURE" >"$dir/libexif-gtk.out" 2>"$dir/libexif-gtk.err"
   require_contains "$dir/libexif-gtk.out" 'browser-ready'
+  CURRENT_ASSERTION="a GTK 3 consumer linked against libexif-gtk3 instantiates the EXIF browser with Fuji metadata"
+  CURRENT_ARTIFACT="$(relative_downstream_path "$dir/libexif-gtk.out")"
 }
 
 test_camlimages() {
@@ -1713,83 +2021,343 @@ EOF
   ocamlfind ocamlopt -package camlimages.exif -linkpkg -o "$dir/camlimages-exif-test" "$dir/camlimages_exif_test.ml"
   "$dir/camlimages-exif-test" "$GENERATED_FIXTURE" >"$dir/camlimages.out"
   require_contains "$dir/camlimages.out" '2024:01:02 03:04:05'
+  CURRENT_ASSERTION="a CamlImages EXIF consumer parses the generated timestamp from the raw APP1 payload"
+  CURRENT_ARTIFACT="$(relative_downstream_path "$dir/camlimages.out")"
 }
 
-test_imagemagick() {
+compile_assert_exif() {
   local dir="$1"
-  local srcdir
-  local identify_bin
 
-  apt-get update >"$dir/imagemagick-apt-update.log" 2>&1
-  apt-get build-dep -y --no-install-recommends imagemagick >"$dir/imagemagick-builddep.log" 2>&1 || {
-    cat "$dir/imagemagick-builddep.log" >&2
-    exit 1
-  }
-  (
-    cd "$dir"
-    apt-get source imagemagick >"$dir/imagemagick-source.log" 2>&1
-  ) || {
-    cat "$dir/imagemagick-source.log" >&2
-    exit 1
-  }
+  assert_deb_artifact_uses_safe_libexif \
+    "exif" \
+    'exif_*_*.deb' \
+    '*/usr/bin/exif' \
+    "$dir" \
+    "the built exif package produced /usr/bin/exif linked against the active safe libexif"
+}
 
-  srcdir="$(find "$dir" -maxdepth 1 -mindepth 1 -type d -name 'imagemagick-*' | LC_ALL=C sort | head -n1)"
-  [[ -n "$srcdir" ]] || die "failed to unpack imagemagick source package"
+compile_assert_exiftran() {
+  local dir="$1"
 
-  if ! (
-    cd "$srcdir"
-    # Noble's debugedit can choke on newer DWARF emitted in transitive inputs.
-    DEB_BUILD_OPTIONS='nocheck noautodbgsym nostrip' dpkg-buildpackage -us -uc -b >"$dir/imagemagick-build.log" 2>&1
-  ); then
-    cat "$dir/imagemagick-build.log" >&2
-    exit 1
+  assert_deb_artifact_uses_safe_libexif \
+    "fbi" \
+    'exiftran_*_*.deb' \
+    '*/usr/bin/exiftran' \
+    "$dir" \
+    "the built fbi source package produced /usr/bin/exiftran linked against the active safe libexif"
+}
+
+compile_assert_eog_plugin_exif_display() {
+  local dir="$1"
+
+  assert_deb_artifact_uses_safe_libexif \
+    "eog-plugins" \
+    'eog-plugin-exif-display_*_*.deb' \
+    '*/eog/plugins/libexif-display.so' \
+    "$dir" \
+    "the built eog-plugin-exif-display shared object links against the active safe libexif"
+}
+
+compile_assert_eog_plugin_map() {
+  local dir="$1"
+
+  assert_deb_artifact_uses_safe_libexif \
+    "eog-plugins" \
+    'eog-plugin-map_*_*.deb' \
+    '*/eog/plugins/libmap.so' \
+    "$dir" \
+    "the built eog-plugin-map shared object links against the active safe libexif"
+}
+
+compile_assert_tracker_extract() {
+  local dir="$1"
+  local deb extract_root artifact
+
+  find_built_deb deb "tracker-miners" 'tracker-extract_*_*.deb'
+  extract_root="$(mktemp -d)"
+  dpkg-deb -x "$deb" "$extract_root"
+  artifact="$(find "$extract_root" -type f \( -path '*/usr/libexec/tracker-extract-3' -o -path '*/usr/libexec/tracker-extract' -o -path '*/usr/libexec/tracker-extract*' \) | LC_ALL=C sort | head -n1)"
+  [[ -n "$artifact" ]] || die "failed to locate built tracker-extract executable"
+  ldd "$artifact" >"$dir/ldd.txt"
+  assert_binary_uses_active_libexif "$artifact"
+  CURRENT_ASSERTION="the built tracker-extract executable links against the active safe libexif"
+  CURRENT_ARTIFACT="$(basename "$deb"):${artifact#"$extract_root"}"
+}
+
+compile_assert_shotwell() {
+  local dir="$1"
+
+  assert_deb_artifact_uses_safe_libexif \
+    "shotwell" \
+    'shotwell_*_*.deb' \
+    '*/usr/bin/shotwell' \
+    "$dir" \
+    "the built Shotwell executable links against the active safe libexif"
+}
+
+compile_assert_foxtrotgps() {
+  local dir="$1"
+
+  assert_deb_artifact_uses_safe_libexif \
+    "foxtrotgps" \
+    'foxtrotgps_*_*.deb' \
+    '*/usr/bin/foxtrotgps' \
+    "$dir" \
+    "the built FoxtrotGPS executable links against the active safe libexif"
+}
+
+compile_assert_gphoto2() {
+  local dir="$1"
+
+  assert_deb_artifact_uses_safe_libexif \
+    "gphoto2" \
+    'gphoto2_*_*.deb' \
+    '*/usr/bin/gphoto2' \
+    "$dir" \
+    "the built gphoto2 executable links against the active safe libexif"
+}
+
+compile_assert_gtkam() {
+  local dir="$1"
+
+  assert_deb_artifact_uses_safe_libexif \
+    "gtkam" \
+    'gtkam_*_*.deb' \
+    '*/usr/bin/gtkam' \
+    "$dir" \
+    "the built GTKam executable links against the active safe libexif"
+}
+
+compile_assert_minidlna() {
+  local dir="$1"
+
+  assert_deb_artifact_uses_safe_libexif \
+    "minidlna" \
+    'minidlna_*_*.deb' \
+    '*/usr/sbin/minidlnad' \
+    "$dir" \
+    "the built MiniDLNA daemon links against the active safe libexif"
+}
+
+compile_assert_gerbera() {
+  local dir="$1"
+
+  assert_deb_artifact_uses_safe_libexif \
+    "gerbera" \
+    'gerbera_*_*.deb' \
+    '*/usr/bin/gerbera' \
+    "$dir" \
+    "the built Gerbera executable links against the active safe libexif"
+}
+
+compile_assert_ruby_exif() {
+  local dir="$1"
+
+  assert_deb_artifact_uses_safe_libexif \
+    "ruby-exif" \
+    'ruby-exif_*_*.deb' \
+    '*/exif.so' \
+    "$dir" \
+    "the built ruby-exif extension links against the active safe libexif"
+}
+
+compile_assert_libexif_gtk3() {
+  local dir="$1"
+
+  assert_deb_artifact_uses_safe_libexif \
+    "libexif-gtk" \
+    'libexif-gtk3-5_*_*.deb' \
+    '*/libexif-gtk3.so.*' \
+    "$dir" \
+    "the built libexif-gtk3 shared library links against the active safe libexif"
+}
+
+compile_assert_camlimages() {
+  local dir="$1"
+  local deb extract_root artifact
+
+  find_built_deb deb "camlimages" 'libcamlimages-ocaml_*_*.deb'
+  extract_root="$(mktemp -d)"
+  dpkg-deb -x "$deb" "$extract_root"
+  artifact="$(find "$extract_root" -type f \( -name '*exif*stubs*.so' -o -name '*exif*.so' \) | LC_ALL=C sort | head -n1 || true)"
+  if [[ -n "$artifact" ]]; then
+    ldd "$artifact" >"$dir/ldd.txt"
+    assert_binary_uses_active_libexif "$artifact"
+    CURRENT_ASSERTION="the built CamlImages EXIF runtime stub links against the active safe libexif"
+    CURRENT_ARTIFACT="$(basename "$deb"):${artifact#"$extract_root"}"
+    return 0
   fi
 
-  find "$dir" -maxdepth 1 -type f -name '*.deb' | LC_ALL=C sort >"$dir/imagemagick-debs.out"
-  require_contains "$dir/imagemagick-debs.out" 'imagemagick_'
-  require_contains "$dir/imagemagick-debs.out" 'imagemagick-6.q16_'
+  CURRENT_ASSERTION="the built CamlImages source package produced the runtime OCaml package"
+  CURRENT_ARTIFACT="$(basename "$deb")"
+}
 
-  identify_bin="$(find "$srcdir" -type f -path '*/utilities/identify' | LC_ALL=C sort | head -n1)"
+compile_assert_imagemagick() {
+  local dir="$1"
+  local packages_list identify_bin source_package="imagemagick"
+
+  build_source_package "$source_package"
+  packages_list="${SOURCE_LOG_DIRS[$source_package]}/packages.txt"
+  require_contains "$packages_list" 'imagemagick_'
+  require_contains "$packages_list" 'imagemagick-6.q16_'
+
+  identify_bin="$(find "${SOURCE_SOURCE_DIRS[$source_package]}" -type f -path '*/utilities/identify' | LC_ALL=C sort | head -n1)"
   [[ -x "$identify_bin" ]] || die "failed to locate freshly built ImageMagick identify binary"
 
   "$identify_bin" -verbose "$GENERATED_FIXTURE" >"$dir/imagemagick.out"
   require_contains "$dir/imagemagick.out" 'Orientation: RightTop'
+  CURRENT_ASSERTION="freshly built identify -verbose reports the generated EXIF orientation as RightTop"
+  CURRENT_ARTIFACT="${identify_bin#"${SOURCE_SOURCE_DIRS[$source_package]}/"}"
 }
 
-run_named_test() {
+write_summary_header() {
+  local path="$1"
+
+  printf 'name\tsource_package\tassertion\tartifact\tstatus\n' >"$path"
+}
+
+append_summary_row() {
+  local path="$1"
+  local name="$2"
+
+  [[ -n "$path" ]] || return 0
+  printf '%s\t%s\t%s\t%s\tok\n' \
+    "$name" \
+    "$(source_package_for_name "$name")" \
+    "$CURRENT_ASSERTION" \
+    "$CURRENT_ARTIFACT" >>"$path"
+}
+
+run_compile_assertion() {
   local name="$1"
-  local function_name="$2"
+  local summary_path="$2"
   local dir
 
   if ! should_run "$name"; then
     return 0
   fi
 
-  dir="$(reset_test_dir "$name")"
-  log_step "Testing $name"
-  "$function_name" "$dir"
+  dir="$(reset_test_dir compile "$name")"
+  log_step "Compile assertion for $name"
+  CURRENT_ASSERTION=""
+  CURRENT_ARTIFACT=""
+
+  case "$name" in
+    exif) compile_assert_exif "$dir" ;;
+    exiftran) compile_assert_exiftran "$dir" ;;
+    eog-plugin-exif-display) compile_assert_eog_plugin_exif_display "$dir" ;;
+    eog-plugin-map) compile_assert_eog_plugin_map "$dir" ;;
+    tracker-extract) compile_assert_tracker_extract "$dir" ;;
+    Shotwell) compile_assert_shotwell "$dir" ;;
+    FoxtrotGPS) compile_assert_foxtrotgps "$dir" ;;
+    gphoto2) compile_assert_gphoto2 "$dir" ;;
+    GTKam) compile_assert_gtkam "$dir" ;;
+    MiniDLNA) compile_assert_minidlna "$dir" ;;
+    Gerbera) compile_assert_gerbera "$dir" ;;
+    ruby-exif) compile_assert_ruby_exif "$dir" ;;
+    libexif-gtk3) compile_assert_libexif_gtk3 "$dir" ;;
+    CamlImages) compile_assert_camlimages "$dir" ;;
+    ImageMagick) compile_assert_imagemagick "$dir" ;;
+    *) die "missing compile assertion for $name" ;;
+  esac
+
+  [[ -n "$CURRENT_ASSERTION" && -n "$CURRENT_ARTIFACT" ]] || die "missing compile summary metadata for $name"
+  append_summary_row "$summary_path" "$name"
+}
+
+run_runtime_test() {
+  local name="$1"
+  local summary_path="$2"
+  local dir
+
+  if ! should_run "$name" || ! is_runtime_dependent "$name"; then
+    return 0
+  fi
+
+  dir="$(reset_test_dir runtime "$name")"
+  log_step "Runtime probe for $name"
+  CURRENT_ASSERTION=""
+  CURRENT_ARTIFACT=""
+
+  case "$name" in
+    exif) test_exif "$dir" ;;
+    exiftran) test_exiftran "$dir" ;;
+    eog-plugin-exif-display) test_eog_plugin_exif_display "$dir" ;;
+    eog-plugin-map) test_eog_plugin_map "$dir" ;;
+    tracker-extract) test_tracker_extract "$dir" ;;
+    Shotwell) test_shotwell "$dir" ;;
+    FoxtrotGPS) test_foxtrotgps "$dir" ;;
+    gphoto2) test_gphoto2 "$dir" ;;
+    GTKam) test_gtkam "$dir" ;;
+    MiniDLNA) test_minidlna "$dir" ;;
+    Gerbera) test_gerbera "$dir" ;;
+    ruby-exif) test_ruby_exif "$dir" ;;
+    libexif-gtk3) test_libexif_gtk3 "$dir" ;;
+    CamlImages) test_camlimages "$dir" ;;
+    *) die "missing runtime probe for $name" ;;
+  esac
+
+  [[ -n "$CURRENT_ASSERTION" && -n "$CURRENT_ARTIFACT" ]] || die "missing runtime summary metadata for $name"
+  append_summary_row "$summary_path" "$name"
+}
+
+run_compile_matrix() {
+  local summary_tmp=""
+  local name
+
+  if [[ -z "$ONLY_FILTER" ]]; then
+    summary_tmp="$(mktemp "$DOWNSTREAM_ROOT/.compile-matrix.XXXXXX")"
+    write_summary_header "$summary_tmp"
+    chmod 0644 "$summary_tmp"
+  fi
+
+  for name in "${REQUIRED_DEPENDENTS[@]}"; do
+    run_compile_assertion "$name" "$summary_tmp"
+  done
+
+  if [[ -n "$summary_tmp" ]]; then
+    mv "$summary_tmp" "$COMPILE_MATRIX_PATH"
+  fi
+}
+
+run_runtime_matrix() {
+  local summary_tmp=""
+  local name
+
+  if [[ -z "$ONLY_FILTER" ]]; then
+    summary_tmp="$(mktemp "$DOWNSTREAM_ROOT/.runtime-matrix.XXXXXX")"
+    write_summary_header "$summary_tmp"
+    chmod 0644 "$summary_tmp"
+  fi
+
+  for name in "${REQUIRED_DEPENDENTS[@]}"; do
+    run_runtime_test "$name" "$summary_tmp"
+  done
+
+  if [[ -n "$summary_tmp" ]]; then
+    mv "$summary_tmp" "$RUNTIME_MATRIX_PATH"
+  fi
 }
 
 validate_dependents
-build_safe_packages
 install_safe_packages
 create_test_fixtures
 
-run_named_test "exif" test_exif
-run_named_test "exiftran" test_exiftran
-run_named_test "eog-plugin-exif-display" test_eog_plugin_exif_display
-run_named_test "eog-plugin-map" test_eog_plugin_map
-run_named_test "tracker-extract" test_tracker_extract
-run_named_test "Shotwell" test_shotwell
-run_named_test "FoxtrotGPS" test_foxtrotgps
-run_named_test "gphoto2" test_gphoto2
-run_named_test "GTKam" test_gtkam
-run_named_test "MiniDLNA" test_minidlna
-run_named_test "Gerbera" test_gerbera
-run_named_test "ruby-exif" test_ruby_exif
-run_named_test "libexif-gtk3" test_libexif_gtk3
-run_named_test "CamlImages" test_camlimages
-run_named_test "ImageMagick" test_imagemagick
+case "$MODE" in
+  compile)
+    run_compile_matrix
+    ;;
+  runtime)
+    run_runtime_matrix
+    ;;
+  all)
+    run_compile_matrix
+    run_runtime_matrix
+    ;;
+  *)
+    die "unsupported mode: $MODE"
+    ;;
+esac
 
 log_step "All requested downstream tests passed"
 CONTAINER_SCRIPT
