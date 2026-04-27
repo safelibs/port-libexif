@@ -1,0 +1,1766 @@
+# Authoritative libexif Port Report
+
+## High-level architecture
+`safe/Cargo.toml` and `cargo metadata --manifest-path safe/Cargo.toml --no-deps` describe a single-package tree, `libexif-safe`, with that same package as the only workspace member and the only library target. The crate builds one Rust library as `rlib`, `cdylib`, and `staticlib`, one build script target from `safe/build.rs`, and five integration-test targets rooted in `safe/tests/`. This tree is not an explicit multi-member Cargo workspace, and `rg -n 'cbindgen|bindgen' safe/Cargo.toml safe/build.rs safe/src safe/tests safe/debian safe/include` found no `cbindgen` or `bindgen` usage.
+
+### Crate layout and exported ABI
+`safe/src/lib.rs` is the crate root. It declares the internal module tree with `ffi`, `object`, `parser`, `primitives`, `runtime`, `tables`, `mnote`, and `i18n`, then re-exports the public MakerNote-facing C ABI from `mnote::base`, `mnote::canon`, `mnote::olympus`, and `mnote::pentax`. The rest of the published libexif ABI is implemented as `extern "C"` exports inside the module files under `safe/src/`, with `#[unsafe(no_mangle)]` preserving the historical symbol names.
+
+`safe/src/ffi/types.rs` defines the C layout surface: `ExifData`, `ExifContent`, `ExifEntry`, `ExifLoader`, `ExifLog`, `ExifMem`, `ExifMnoteData`, the MakerNote method vtable, allocator callbacks, content/data iteration callbacks, and the log callback slot. `safe/src/ffi/panic_boundary.rs` is the common unwind barrier: all pointer-bearing exported entry points route through `catch_unwind` wrappers so Rust panics do not cross the C ABI.
+
+### Directory map
+- `safe/src/ffi/`: C-compatible type definitions and the panic boundary.
+- `safe/src/object/`: owning object graph for `ExifData`, per-IFD `ExifContent`, and per-tag `ExifEntry`.
+- `safe/src/parser/`: JPEG or raw-EXIF discovery, bounds-checked parsing, serialization, and loader streaming state.
+- `safe/src/primitives/`: byte-order, format, IFD, and raw scalar packing helpers exposed as libexif C helpers.
+- `safe/src/runtime/`: allocator, logging, and stdio shims that preserve libexif runtime behavior.
+- `safe/src/tables/`: generated tag tables, GPS tables, and option-description tables.
+- `safe/src/mnote/`: Apple, Canon, Fuji, Olympus, and Pentax MakerNote identification, load, save, and formatting logic.
+- `safe/src/i18n.rs`: gettext integration for translated user-facing strings.
+
+### Data flow through the port
+`safe/src/object/data.rs` constructs `ExifData` with one `ExifContent` per IFD and owns the shared `ExifMem`, `ExifLog`, thumbnail buffer, and optional parsed MakerNote object. `safe/src/object/content.rs` manages per-IFD entry vectors, fix-up rules, and tag lookup. `safe/src/object/entry.rs` owns individual tag payloads, initialization defaults, formatting, and value rendering.
+
+`safe/src/parser/data_load.rs` accepts caller buffers or loader/file results, resolves either raw EXIF payloads or JPEG APP1 segments, reads TIFF fields with checked arithmetic from `safe/src/parser/limits.rs`, and materializes entries into the object graph. `safe/src/parser/loader.rs` implements the stateful streaming/file loader that accumulates EXIF bytes before handing them to `exif_data_load_data_impl`. After base EXIF parsing, `safe/src/mnote/mod.rs` locates the MakerNote entry, chooses a vendor parser, and constructs an `ExifMnoteData` implementation from the Rust MakerNote modules.
+
+`safe/src/parser/data_save.rs` walks the object graph back into an EXIF/TIFF byte stream, sorts directory records, emits pointer entries, serializes thumbnails, and calls `mnote::prepare_maker_note_for_save_impl` so the vendor-specific MakerNote payload is rewritten before the final buffer is returned to the caller.
+
+### Build, packaging, and installed payload
+`safe/build.rs` is the only code-generation step. It reads `original/libexif/libexif.sym` to generate the linker version script, preprocesses `original/libexif/exif-tag.c` with the system C preprocessor to generate the tag-table Rust module in Cargo `OUT_DIR`, injects gettext-related `rustc-env` variables, and compiles exactly one non-Rust translation unit, `safe/cshim/exif-log-shim.c`, via `cc = "1.2"`. That C shim is the retained variadic logging bridge required by the historical libexif logging ABI.
+
+The install surface is driven by `safe/debian/rules`, the checked-in pkg-config templates in `safe/`, and the validation logic in the package-build harness under `safe/tests/`. The Debian build produces:
+- `libexif12`: the packaged shared library under `safe/.artifacts/impl_09_final_release/libexif12/usr/lib/x86_64-linux-gnu/`.
+- `libexif-dev`: headers under `safe/.artifacts/impl_09_final_release/libexif-dev/usr/include/libexif/`, the static archive `safe/.artifacts/impl_09_final_release/libexif-dev/usr/lib/x86_64-linux-gnu/libexif.a`, the dev-library directory `safe/.artifacts/impl_09_final_release/libexif-dev/usr/lib/x86_64-linux-gnu/` that the validator inspects for the development symlink, and the pkg-config directory `safe/.artifacts/impl_09_final_release/libexif-dev/usr/lib/x86_64-linux-gnu/pkgconfig/`, which contains the installed metadata file.
+- `libexif-doc`: the checked-in Doxygen HTML tree from `safe/doc/libexif-api.html/` and the example programs shipped under the doc package.
+
+`safe/debian/rules` also installs the checked-in NEWS, README, and security note from `safe/` into the packaged docs and copies the compiled translation files from `safe/po/` into `safe/.artifacts/impl_09_final_release/root/usr/share/locale/`, for example `safe/.artifacts/impl_09_final_release/root/usr/share/locale/de/LC_MESSAGES/libexif-12.mo`. The package-build harness under `safe/tests/` validates the resulting headers, symlinks, pkg-config metadata, doc-base metadata, examples, and locale payload directly from `safe/.artifacts/impl_09_final_release`.
+
+## Where the unsafe Rust lives
+The raw sweep was `grep -RIn '\bunsafe\b' safe`, which intentionally over-reports because it traverses `safe/.artifacts/impl_09_final_release`, duplicates packaged doc copies of `safe/NEWS`, and emits a known broken-symlink error under `safe/.artifacts/impl_09_final_release/libexif-dev/usr/lib/x86_64-linux-gnu/`. The structural sweep was `rg -n '\bunsafe\s+extern\b|\bunsafe\s+fn\b|\bunsafe\s+impl\b|\bunsafe\s*\{|#\[unsafe\(no_mangle\)\]' safe/src safe/tests safe/build.rs`. The grouped notes below explain why each bucket of `unsafe` exists, and the exact per-file ledger later in this section is the authoritative reconciliation target for tracked Rust sources only. No `unsafe impl` sites exist under `safe/src/`, the tracked Rust tests in `safe/tests/`, or `safe/build.rs`.
+
+### Type-level ABI slots
+- `safe/src/ffi/types.rs:146,147,148,149,150,151,152,153,154,157` define the MakerNote vtable as `unsafe extern "C" fn` slots because each callback may dereference caller-owned raw pointers and mutate C-layout objects.
+- `safe/src/ffi/types.rs:169,170,171` define allocator callbacks as unsafe function-pointer types because the ABI allows arbitrary foreign allocators and frees to operate on raw storage.
+- `safe/src/ffi/types.rs:173,174,182` define content/data iteration callbacks and the log callback slot as unsafe pointer-bearing ABI carriers whose callers control lifetimes, aliasing, and buffer validity.
+
+### Foreign declaration blocks
+- `safe/src/lib.rs:31` declares the local C shim anchor as an `unsafe extern "C"` symbol because Rust is importing a non-Rust symbol that must exist at link time.
+- `safe/src/i18n.rs:10` declares the gettext functions as foreign imports whose returned pointers and global locale effects are outside Rust’s safety model.
+- `safe/src/runtime/cstdio.rs:5` imports variadic `printf`, which is inherently outside the checked Rust type system.
+- `safe/src/runtime/mem.rs:8` imports `calloc`, `realloc`, and `free`, which operate on raw memory and foreign allocator state.
+- `safe/src/object/entry.rs:131` imports `time` and `localtime_r`, which expose libc-managed state and caller-supplied output storage.
+- `safe/src/mnote/apple.rs:96`, `safe/src/mnote/canon.rs:63`, `safe/src/mnote/fuji.rs:422`, `safe/src/mnote/olympus.rs:537`, and `safe/src/mnote/pentax.rs:1028` redeclare `exif_log` for internal self-calls back into the exported libexif logging ABI.
+- `safe/tests/object_model.rs:8`, `safe/tests/cve_regressions.rs:6`, and `safe/tests/primitives_tables.rs:12` import the public C ABI directly so the tests can validate layout, pointer ownership, and callback behavior from the caller side.
+
+### Exported ABI entry points
+- `safe/src/primitives/utils.rs:103,111,116,125,134,139,144,153,162,181,200,215,234` expose raw scalar load/store helpers as unsafe because the caller supplies the backing buffers and byte-order interpretation.
+- `safe/src/runtime/mem.rs:143,159,164,169,176,187` keep the `ExifMem` allocator ABI unsafe because the foreign caller controls allocator callbacks, storage lifetime, and the pointers being reallocated or freed.
+- `safe/src/runtime/log.rs:140,150,155,160,165` keep the `ExifLog` object-management and callback-registration ABI unsafe because callers supply log objects, function pointers, and user data.
+- `safe/src/object/content.rs:448,455,460,465,470,475,483,493,498,509,516,521` keep the `ExifContent` ABI unsafe because callers control content pointers, entry ownership, callback functions, and dump/log targets.
+- `safe/src/object/data.rs:499,504,514,519,524,529,536,541,548,553,562,567,572,577,584,589,594` keep the `ExifData` ABI unsafe because callers control raw `ExifData` pointers, input buffers, per-content callbacks, and log objects.
+- `safe/src/object/entry.rs:2316,2321,2326,2331,2336,2341,2346,2357` keep the `ExifEntry` ABI unsafe because callers can supply invalid entry pointers, buffers, and tags while the implementation dereferences and mutates C-layout storage.
+- `safe/src/parser/data_load.rs:483,492`, `safe/src/parser/data_save.rs:437`, and `safe/src/parser/loader.rs:501,506,511,516,521,532,537,544,553` keep the parse/save/loader ABI unsafe because callers own the source buffers, output locations, file-path pointers, loader objects, and callback plumbing.
+- `safe/src/tables/tag_table.rs:196` keeps `exif_tag_from_name` unsafe because it dereferences a caller-provided C string.
+- `safe/src/mnote/base.rs:57,77,89,106,122,138,151,166,178,188,201,217,233,251`, `safe/src/mnote/canon.rs:1692,1700`, `safe/src/mnote/olympus.rs:2310,2323`, and `safe/src/mnote/pentax.rs:1653,1658` keep the MakerNote constructor, dispatcher, and value-rendering ABI unsafe because callers own the note objects, backing buffers, and output strings.
+
+### Raw object-graph, parser, and formatting internals
+- `safe/src/runtime/mem.rs:27,31,35,39,70,80,89,99,111,127` contain the allocator internals that bridge `ExifMem` into libc allocation callbacks and raw pointer casts.
+- `safe/src/runtime/log.rs:54,72,79,88,98,112` contain the log object internals that allocate, refcount, free, and mutate `ExifLogPrivate` through raw pointers.
+- `safe/src/object/content.rs:29,34,42,78,85,94,106,131,172,208,265,289,312,327,350,354,368,418` implement `ExifContent` private-pointer casting, refcounting, entry-vector growth, callback traversal, fix-up callbacks, and dump/log traversal over raw C-layout storage.
+- `safe/src/object/data.rs:40,45,53,57,65,75,118,126,134,151,159,167,175,233,240,251,260,272,312,329,378,393,403,413,423,456,460` implement `ExifData` private-pointer casting, thumbnail reset/free, MakerNote ownership swaps, byte-order rewrites, content iteration, fix-up callbacks, and dump/log traversal across the raw object graph.
+- `safe/src/object/entry.rs:508,513,528,540,551,582,589,598,610,655,876,878,905,946,2205,2218,2259` implement `ExifEntry` private-pointer casting, allocator bridging, refcounting, in-place payload rewrites, GPS initialization, libc time formatting, buffer copying, value rendering, and dumping over raw entry storage.
+- `safe/src/primitives/utils.rs:18,37,62,83` contain the byte-buffer bridge helpers that reinterpret raw scalar buffers before the exported numeric helpers wrap them.
+- `safe/src/parser/data_load.rs:180,188,197,236,243,248,254,301,302,306,370,404,433,437,441,447,456,457,466,471,476,477,478` contain the actual unsafe dereferences and raw buffer copies inside the checked parser helpers, including thumbnail replacement, entry allocation, content insertion, option checks, slice bridging, object reset, loader handoff, and file-based construction.
+- `safe/src/parser/data_save.rs:109,110,117,136,160,164,166,174,179,185,189,220,221,226,231,238,243,248,253,287,298,300,301,316,317,331,332,345,346,363,374,388,401,407,410,421,429` contain the serializer’s raw content traversals, entry dereferences, thumbnail copies, output-pointer writes, and final buffer handoff.
+- `safe/src/parser/loader.rs:79,89,132,315,338,345,355,369,381,399,433,456,482` implement the streaming loader’s raw allocator access, staged buffer copies, refcounting, reset/free, file-path bridging, parsed-data extraction, and log attachment.
+- `safe/src/i18n.rs:42,51` contain the safe-wrapper unsafe blocks that initialize gettext once and turn a foreign translation pointer back into the libexif string surface.
+- `safe/src/runtime/cstdio.rs:14` is the only stdio unsafe block, calling `printf` for dump-style output.
+- `safe/src/lib.rs:36` stores the C shim anchor in a `#[used]` static so the variadic log shim is retained in the final library.
+- `safe/src/mnote/mod.rs:19,44,71,102` contain raw MakerNote entry lookup, vendor selection, note construction, note loading, and MakerNote save preparation over `ExifData` and `ExifEntry` pointers.
+- `safe/src/mnote/base.rs:29,33,314,323,339,385` implement MakerNote private-pointer casting, note destruction, zeroing/output-buffer helpers, and generic MakerNote value formatting over caller-provided buffers.
+- `safe/src/mnote/apple.rs:111,127,139,163,331,338,371,380,392,404,416,544,562,571` implement Apple MakerNote logging, free/load/value methods, metadata getters, vendor detection, and constructor allocation over raw buffers and C-layout entries.
+- `safe/src/mnote/canon.rs:1134,1145,1157,1180,1205,1231,1257,1289,1296,1386,1534,1546,1563,1589,1615,1632,1657` implement Canon MakerNote logging, cleanup, tag-table expansion, save/load paths, metadata getters, vendor detection, and note construction with manual pointer arithmetic and allocator calls.
+- `safe/src/mnote/fuji.rs:437,448,460,483,487,692,775,915,924,936,947,958,969,1002,1009,1018` implement Fuji MakerNote logging, cleanup, save/load paths, metadata getters, vendor detection, and constructor allocation over raw EXIF payloads.
+- `safe/src/mnote/olympus.rs:1655,1666,1678,1700,1704,1717,1892,2116,2125,2137,2149,2161,2174,2205,2212,2248,2279` implement Olympus/Nikon/Sanyo MakerNote logging, cleanup, format/render paths, save/load paths, metadata getters, variant identification, vendor detection, and constructor allocation with manual pointer traversal.
+- `safe/src/mnote/pentax.rs:1174,1185,1197,1220,1224,1353,1500,1509,1521,1533,1545,1557,1564,1595,1622,1817` implement Pentax/Casio MakerNote logging, cleanup, save/load paths, metadata getters, vendor detection, constructor allocation, and value rendering over raw MakerNote arrays.
+
+### Test-only unsafe
+- `safe/tests/abi_layout.rs:15` intentionally uses raw field-address arithmetic to assert that the Rust `repr(C)` layouts still match the installed C headers.
+- `safe/tests/object_model.rs:47,82,120,147,210` exercises the public C ABI directly, including pointer-based object ownership and conversion back from returned C strings.
+- `safe/tests/cve_regressions.rs:60,78,88,100,203,214,224,238,254,276,277,292,297,312,316,328` deliberately constructs malformed buffers, inspects raw `ExifData` fields, and calls the ABI without safe wrappers to prove the current CVE guardrails.
+- `safe/tests/primitives_tables.rs:41,43,46,48,51,53,111,112,113,114,120,123,138,172,211,213,285` exercises allocator callbacks, null handling, and callback pointer semantics at the ABI boundary.
+
+### Exhaustive tracked-source line ledger
+Each bullet below is one concrete tracked-source site from the structural sweep after excluding `#[unsafe(no_mangle)]` attributes, and each bullet carries its own one-sentence justification. `safe/build.rs` contributed no matches.
+
+#### safe/src/ffi/types.rs
+- `safe/src/ffi/types.rs:146` This site declares an unsafe C callback or iterator slot that trusts foreign pointer validity.
+- `safe/src/ffi/types.rs:147` This site declares an unsafe C callback or iterator slot that trusts foreign pointer validity.
+- `safe/src/ffi/types.rs:148` This site declares an unsafe C callback or iterator slot that trusts foreign pointer validity.
+- `safe/src/ffi/types.rs:149` This site declares an unsafe C callback or iterator slot that trusts foreign pointer validity.
+- `safe/src/ffi/types.rs:150` This site declares an unsafe C callback or iterator slot that trusts foreign pointer validity.
+- `safe/src/ffi/types.rs:151` This site declares an unsafe C callback or iterator slot that trusts foreign pointer validity.
+- `safe/src/ffi/types.rs:152` This site declares an unsafe C callback or iterator slot that trusts foreign pointer validity.
+- `safe/src/ffi/types.rs:153` This site declares an unsafe C callback or iterator slot that trusts foreign pointer validity.
+- `safe/src/ffi/types.rs:154` This site declares an unsafe C callback or iterator slot that trusts foreign pointer validity.
+- `safe/src/ffi/types.rs:155` This site declares an unsafe C callback or iterator slot that trusts foreign pointer validity.
+- `safe/src/ffi/types.rs:157` This site declares an unsafe C callback or iterator slot that trusts foreign pointer validity.
+- `safe/src/ffi/types.rs:169` This site declares an unsafe C callback or iterator slot that trusts foreign pointer validity.
+- `safe/src/ffi/types.rs:170` This site declares an unsafe C callback or iterator slot that trusts foreign pointer validity.
+- `safe/src/ffi/types.rs:171` This site declares an unsafe C callback or iterator slot that trusts foreign pointer validity.
+- `safe/src/ffi/types.rs:173` This site declares an unsafe C callback or iterator slot that trusts foreign pointer validity.
+- `safe/src/ffi/types.rs:174` This site declares an unsafe C callback or iterator slot that trusts foreign pointer validity.
+- `safe/src/ffi/types.rs:182` This site declares an unsafe C callback or iterator slot that trusts foreign pointer validity.
+
+#### safe/src/i18n.rs
+- `safe/src/i18n.rs:10` This site crosses into gettext and trusts foreign string pointers and locale-global state.
+- `safe/src/i18n.rs:42` This site crosses into gettext and trusts foreign string pointers and locale-global state.
+- `safe/src/i18n.rs:51` This site crosses into gettext and trusts foreign string pointers and locale-global state.
+
+#### safe/src/lib.rs
+- `safe/src/lib.rs:31` This site imports or retains the local variadic C logging shim for the published ABI.
+- `safe/src/lib.rs:36` This site imports or retains the local variadic C logging shim for the published ABI.
+
+#### safe/src/mnote/apple.rs
+- `safe/src/mnote/apple.rs:96` This site is part of Apple MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/apple.rs:111` This site is part of Apple MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/apple.rs:117` This site is part of Apple MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/apple.rs:127` This site is part of Apple MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/apple.rs:128` This site is part of Apple MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/apple.rs:139` This site is part of Apple MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/apple.rs:145` This site is part of Apple MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/apple.rs:146` This site is part of Apple MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/apple.rs:147` This site is part of Apple MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/apple.rs:148` This site is part of Apple MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/apple.rs:149` This site is part of Apple MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/apple.rs:155` This site is part of Apple MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/apple.rs:163` This site is part of Apple MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/apple.rs:173` This site is part of Apple MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/apple.rs:178` This site is part of Apple MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/apple.rs:180` This site is part of Apple MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/apple.rs:184` This site is part of Apple MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/apple.rs:185` This site is part of Apple MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/apple.rs:196` This site is part of Apple MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/apple.rs:197` This site is part of Apple MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/apple.rs:203` This site is part of Apple MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/apple.rs:209` This site is part of Apple MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/apple.rs:212` This site is part of Apple MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/apple.rs:215` This site is part of Apple MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/apple.rs:219` This site is part of Apple MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/apple.rs:228` This site is part of Apple MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/apple.rs:241` This site is part of Apple MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/apple.rs:242` This site is part of Apple MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/apple.rs:249` This site is part of Apple MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/apple.rs:250` This site is part of Apple MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/apple.rs:251` This site is part of Apple MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/apple.rs:253` This site is part of Apple MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/apple.rs:266` This site is part of Apple MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/apple.rs:275` This site is part of Apple MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/apple.rs:284` This site is part of Apple MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/apple.rs:301` This site is part of Apple MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/apple.rs:303` This site is part of Apple MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/apple.rs:306` This site is part of Apple MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/apple.rs:309` This site is part of Apple MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/apple.rs:322` This site is part of Apple MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/apple.rs:328` This site is part of Apple MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/apple.rs:331` This site is part of Apple MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/apple.rs:334` This site is part of Apple MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/apple.rs:338` This site is part of Apple MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/apple.rs:343` This site is part of Apple MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/apple.rs:347` This site is part of Apple MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/apple.rs:348` This site is part of Apple MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/apple.rs:349` This site is part of Apple MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/apple.rs:350` This site is part of Apple MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/apple.rs:351` This site is part of Apple MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/apple.rs:356` This site is part of Apple MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/apple.rs:368` This site is part of Apple MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/apple.rs:371` This site is part of Apple MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/apple.rs:376` This site is part of Apple MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/apple.rs:380` This site is part of Apple MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/apple.rs:385` This site is part of Apple MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/apple.rs:389` This site is part of Apple MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/apple.rs:392` This site is part of Apple MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/apple.rs:397` This site is part of Apple MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/apple.rs:401` This site is part of Apple MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/apple.rs:404` This site is part of Apple MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/apple.rs:409` This site is part of Apple MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/apple.rs:413` This site is part of Apple MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/apple.rs:416` This site is part of Apple MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/apple.rs:421` This site is part of Apple MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/apple.rs:425` This site is part of Apple MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/apple.rs:438` This site is part of Apple MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/apple.rs:443` This site is part of Apple MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/apple.rs:455` This site is part of Apple MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/apple.rs:465` This site is part of Apple MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/apple.rs:469` This site is part of Apple MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/apple.rs:471` This site is part of Apple MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/apple.rs:472` This site is part of Apple MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/apple.rs:477` This site is part of Apple MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/apple.rs:483` This site is part of Apple MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/apple.rs:501` This site is part of Apple MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/apple.rs:503` This site is part of Apple MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/apple.rs:505` This site is part of Apple MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/apple.rs:519` This site is part of Apple MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/apple.rs:523` This site is part of Apple MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/apple.rs:525` This site is part of Apple MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/apple.rs:533` This site is part of Apple MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/apple.rs:544` This site is part of Apple MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/apple.rs:551` This site is part of Apple MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/apple.rs:556` This site is part of Apple MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/apple.rs:562` This site is part of Apple MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/apple.rs:563` This site is part of Apple MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/apple.rs:567` This site is part of Apple MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/apple.rs:571` This site is part of Apple MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/apple.rs:576` This site is part of Apple MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/apple.rs:582` This site is part of Apple MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/apple.rs:585` This site is part of Apple MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/apple.rs:601` This site is part of Apple MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+
+#### safe/src/mnote/base.rs
+- `safe/src/mnote/base.rs:29` This site is part of generic MakerNote pointer casting, destruction, or output-buffer formatting.
+- `safe/src/mnote/base.rs:30` This site is part of generic MakerNote pointer casting, destruction, or output-buffer formatting.
+- `safe/src/mnote/base.rs:33` This site is part of generic MakerNote pointer casting, destruction, or output-buffer formatting.
+- `safe/src/mnote/base.rs:38` This site is part of generic MakerNote pointer casting, destruction, or output-buffer formatting.
+- `safe/src/mnote/base.rs:39` This site is part of generic MakerNote pointer casting, destruction, or output-buffer formatting.
+- `safe/src/mnote/base.rs:40` This site is part of generic MakerNote pointer casting, destruction, or output-buffer formatting.
+- `safe/src/mnote/base.rs:49` This site is part of generic MakerNote pointer casting, destruction, or output-buffer formatting.
+- `safe/src/mnote/base.rs:57` This site is part of generic MakerNote pointer casting, destruction, or output-buffer formatting.
+- `safe/src/mnote/base.rs:58` This site is part of generic MakerNote pointer casting, destruction, or output-buffer formatting.
+- `safe/src/mnote/base.rs:77` This site is part of generic MakerNote pointer casting, destruction, or output-buffer formatting.
+- `safe/src/mnote/base.rs:78` This site is part of generic MakerNote pointer casting, destruction, or output-buffer formatting.
+- `safe/src/mnote/base.rs:89` This site is part of generic MakerNote pointer casting, destruction, or output-buffer formatting.
+- `safe/src/mnote/base.rs:90` This site is part of generic MakerNote pointer casting, destruction, or output-buffer formatting.
+- `safe/src/mnote/base.rs:106` This site is part of generic MakerNote pointer casting, destruction, or output-buffer formatting.
+- `safe/src/mnote/base.rs:111` This site is part of generic MakerNote pointer casting, destruction, or output-buffer formatting.
+- `safe/src/mnote/base.rs:122` This site is part of generic MakerNote pointer casting, destruction, or output-buffer formatting.
+- `safe/src/mnote/base.rs:127` This site is part of generic MakerNote pointer casting, destruction, or output-buffer formatting.
+- `safe/src/mnote/base.rs:138` This site is part of generic MakerNote pointer casting, destruction, or output-buffer formatting.
+- `safe/src/mnote/base.rs:139` This site is part of generic MakerNote pointer casting, destruction, or output-buffer formatting.
+- `safe/src/mnote/base.rs:151` This site is part of generic MakerNote pointer casting, destruction, or output-buffer formatting.
+- `safe/src/mnote/base.rs:155` This site is part of generic MakerNote pointer casting, destruction, or output-buffer formatting.
+- `safe/src/mnote/base.rs:166` This site is part of generic MakerNote pointer casting, destruction, or output-buffer formatting.
+- `safe/src/mnote/base.rs:167` This site is part of generic MakerNote pointer casting, destruction, or output-buffer formatting.
+- `safe/src/mnote/base.rs:178` This site is part of generic MakerNote pointer casting, destruction, or output-buffer formatting.
+- `safe/src/mnote/base.rs:179` This site is part of generic MakerNote pointer casting, destruction, or output-buffer formatting.
+- `safe/src/mnote/base.rs:188` This site is part of generic MakerNote pointer casting, destruction, or output-buffer formatting.
+- `safe/src/mnote/base.rs:189` This site is part of generic MakerNote pointer casting, destruction, or output-buffer formatting.
+- `safe/src/mnote/base.rs:201` This site is part of generic MakerNote pointer casting, destruction, or output-buffer formatting.
+- `safe/src/mnote/base.rs:205` This site is part of generic MakerNote pointer casting, destruction, or output-buffer formatting.
+- `safe/src/mnote/base.rs:217` This site is part of generic MakerNote pointer casting, destruction, or output-buffer formatting.
+- `safe/src/mnote/base.rs:221` This site is part of generic MakerNote pointer casting, destruction, or output-buffer formatting.
+- `safe/src/mnote/base.rs:233` This site is part of generic MakerNote pointer casting, destruction, or output-buffer formatting.
+- `safe/src/mnote/base.rs:237` This site is part of generic MakerNote pointer casting, destruction, or output-buffer formatting.
+- `safe/src/mnote/base.rs:251` This site is part of generic MakerNote pointer casting, destruction, or output-buffer formatting.
+- `safe/src/mnote/base.rs:257` This site is part of generic MakerNote pointer casting, destruction, or output-buffer formatting.
+- `safe/src/mnote/base.rs:314` This site is part of generic MakerNote pointer casting, destruction, or output-buffer formatting.
+- `safe/src/mnote/base.rs:319` This site is part of generic MakerNote pointer casting, destruction, or output-buffer formatting.
+- `safe/src/mnote/base.rs:323` This site is part of generic MakerNote pointer casting, destruction, or output-buffer formatting.
+- `safe/src/mnote/base.rs:328` This site is part of generic MakerNote pointer casting, destruction, or output-buffer formatting.
+- `safe/src/mnote/base.rs:334` This site is part of generic MakerNote pointer casting, destruction, or output-buffer formatting.
+- `safe/src/mnote/base.rs:339` This site is part of generic MakerNote pointer casting, destruction, or output-buffer formatting.
+- `safe/src/mnote/base.rs:344` This site is part of generic MakerNote pointer casting, destruction, or output-buffer formatting.
+- `safe/src/mnote/base.rs:380` This site is part of generic MakerNote pointer casting, destruction, or output-buffer formatting.
+- `safe/src/mnote/base.rs:385` This site is part of generic MakerNote pointer casting, destruction, or output-buffer formatting.
+- `safe/src/mnote/base.rs:397` This site is part of generic MakerNote pointer casting, destruction, or output-buffer formatting.
+- `safe/src/mnote/base.rs:410` This site is part of generic MakerNote pointer casting, destruction, or output-buffer formatting.
+- `safe/src/mnote/base.rs:416` This site is part of generic MakerNote pointer casting, destruction, or output-buffer formatting.
+- `safe/src/mnote/base.rs:423` This site is part of generic MakerNote pointer casting, destruction, or output-buffer formatting.
+- `safe/src/mnote/base.rs:424` This site is part of generic MakerNote pointer casting, destruction, or output-buffer formatting.
+- `safe/src/mnote/base.rs:433` This site is part of generic MakerNote pointer casting, destruction, or output-buffer formatting.
+- `safe/src/mnote/base.rs:436` This site is part of generic MakerNote pointer casting, destruction, or output-buffer formatting.
+- `safe/src/mnote/base.rs:445` This site is part of generic MakerNote pointer casting, destruction, or output-buffer formatting.
+- `safe/src/mnote/base.rs:446` This site is part of generic MakerNote pointer casting, destruction, or output-buffer formatting.
+- `safe/src/mnote/base.rs:455` This site is part of generic MakerNote pointer casting, destruction, or output-buffer formatting.
+- `safe/src/mnote/base.rs:456` This site is part of generic MakerNote pointer casting, destruction, or output-buffer formatting.
+- `safe/src/mnote/base.rs:464` This site is part of generic MakerNote pointer casting, destruction, or output-buffer formatting.
+- `safe/src/mnote/base.rs:480` This site is part of generic MakerNote pointer casting, destruction, or output-buffer formatting.
+- `safe/src/mnote/base.rs:497` This site is part of generic MakerNote pointer casting, destruction, or output-buffer formatting.
+
+#### safe/src/mnote/canon.rs
+- `safe/src/mnote/canon.rs:63` This site is part of Canon MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/canon.rs:1134` This site is part of Canon MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/canon.rs:1135` This site is part of Canon MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/canon.rs:1145` This site is part of Canon MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/canon.rs:1146` This site is part of Canon MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/canon.rs:1157` This site is part of Canon MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/canon.rs:1162` This site is part of Canon MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/canon.rs:1163` This site is part of Canon MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/canon.rs:1164` This site is part of Canon MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/canon.rs:1165` This site is part of Canon MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/canon.rs:1166` This site is part of Canon MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/canon.rs:1172` This site is part of Canon MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/canon.rs:1180` This site is part of Canon MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/canon.rs:1181` This site is part of Canon MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/canon.rs:1188` This site is part of Canon MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/canon.rs:1198` This site is part of Canon MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/canon.rs:1205` This site is part of Canon MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/canon.rs:1215` This site is part of Canon MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/canon.rs:1217` This site is part of Canon MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/canon.rs:1219` This site is part of Canon MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/canon.rs:1231` This site is part of Canon MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/canon.rs:1243` This site is part of Canon MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/canon.rs:1244` This site is part of Canon MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/canon.rs:1247` This site is part of Canon MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/canon.rs:1257` This site is part of Canon MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/canon.rs:1266` This site is part of Canon MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/canon.rs:1267` This site is part of Canon MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/canon.rs:1268` This site is part of Canon MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/canon.rs:1269` This site is part of Canon MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/canon.rs:1270` This site is part of Canon MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/canon.rs:1271` This site is part of Canon MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/canon.rs:1272` This site is part of Canon MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/canon.rs:1276` This site is part of Canon MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/canon.rs:1289` This site is part of Canon MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/canon.rs:1292` This site is part of Canon MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/canon.rs:1296` This site is part of Canon MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/canon.rs:1306` This site is part of Canon MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/canon.rs:1308` This site is part of Canon MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/canon.rs:1310` This site is part of Canon MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/canon.rs:1313` This site is part of Canon MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/canon.rs:1319` This site is part of Canon MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/canon.rs:1320` This site is part of Canon MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/canon.rs:1322` This site is part of Canon MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/canon.rs:1343` This site is part of Canon MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/canon.rs:1348` This site is part of Canon MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/canon.rs:1352` This site is part of Canon MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/canon.rs:1360` This site is part of Canon MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/canon.rs:1362` This site is part of Canon MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/canon.rs:1374` This site is part of Canon MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/canon.rs:1376` This site is part of Canon MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/canon.rs:1378` This site is part of Canon MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/canon.rs:1381` This site is part of Canon MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/canon.rs:1386` This site is part of Canon MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/canon.rs:1395` This site is part of Canon MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/canon.rs:1400` This site is part of Canon MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/canon.rs:1402` This site is part of Canon MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/canon.rs:1406` This site is part of Canon MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/canon.rs:1409` This site is part of Canon MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/canon.rs:1421` This site is part of Canon MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/canon.rs:1423` This site is part of Canon MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/canon.rs:1426` This site is part of Canon MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/canon.rs:1429` This site is part of Canon MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/canon.rs:1435` This site is part of Canon MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/canon.rs:1439` This site is part of Canon MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/canon.rs:1440` This site is part of Canon MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/canon.rs:1447` This site is part of Canon MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/canon.rs:1449` This site is part of Canon MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/canon.rs:1451` This site is part of Canon MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/canon.rs:1465` This site is part of Canon MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/canon.rs:1470` This site is part of Canon MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/canon.rs:1473` This site is part of Canon MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/canon.rs:1481` This site is part of Canon MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/canon.rs:1484` This site is part of Canon MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/canon.rs:1499` This site is part of Canon MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/canon.rs:1501` This site is part of Canon MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/canon.rs:1505` This site is part of Canon MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/canon.rs:1512` This site is part of Canon MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/canon.rs:1531` This site is part of Canon MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/canon.rs:1534` This site is part of Canon MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/canon.rs:1540` This site is part of Canon MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/canon.rs:1541` This site is part of Canon MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/canon.rs:1546` This site is part of Canon MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/canon.rs:1555` This site is part of Canon MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/canon.rs:1556` This site is part of Canon MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/canon.rs:1559` This site is part of Canon MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/canon.rs:1563` This site is part of Canon MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/canon.rs:1573` This site is part of Canon MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/canon.rs:1574` This site is part of Canon MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/canon.rs:1577` This site is part of Canon MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/canon.rs:1582` This site is part of Canon MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/canon.rs:1589` This site is part of Canon MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/canon.rs:1599` This site is part of Canon MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/canon.rs:1600` This site is part of Canon MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/canon.rs:1603` This site is part of Canon MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/canon.rs:1608` This site is part of Canon MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/canon.rs:1615` This site is part of Canon MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/canon.rs:1624` This site is part of Canon MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/canon.rs:1625` This site is part of Canon MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/canon.rs:1628` This site is part of Canon MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/canon.rs:1632` This site is part of Canon MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/canon.rs:1636` This site is part of Canon MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/canon.rs:1642` This site is part of Canon MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/canon.rs:1653` This site is part of Canon MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/canon.rs:1657` This site is part of Canon MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/canon.rs:1662` This site is part of Canon MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/canon.rs:1668` This site is part of Canon MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/canon.rs:1671` This site is part of Canon MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/canon.rs:1688` This site is part of Canon MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/canon.rs:1692` This site is part of Canon MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/canon.rs:1696` This site is part of Canon MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/canon.rs:1700` This site is part of Canon MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/canon.rs:1706` This site is part of Canon MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+
+#### safe/src/mnote/fuji.rs
+- `safe/src/mnote/fuji.rs:422` This site is part of Fuji MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/fuji.rs:437` This site is part of Fuji MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/fuji.rs:438` This site is part of Fuji MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/fuji.rs:448` This site is part of Fuji MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/fuji.rs:449` This site is part of Fuji MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/fuji.rs:460` This site is part of Fuji MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/fuji.rs:465` This site is part of Fuji MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/fuji.rs:466` This site is part of Fuji MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/fuji.rs:467` This site is part of Fuji MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/fuji.rs:468` This site is part of Fuji MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/fuji.rs:469` This site is part of Fuji MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/fuji.rs:475` This site is part of Fuji MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/fuji.rs:483` This site is part of Fuji MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/fuji.rs:484` This site is part of Fuji MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/fuji.rs:487` This site is part of Fuji MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/fuji.rs:494` This site is part of Fuji MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/fuji.rs:498` This site is part of Fuji MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/fuji.rs:509` This site is part of Fuji MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/fuji.rs:518` This site is part of Fuji MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/fuji.rs:527` This site is part of Fuji MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/fuji.rs:530` This site is part of Fuji MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/fuji.rs:531` This site is part of Fuji MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/fuji.rs:536` This site is part of Fuji MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/fuji.rs:545` This site is part of Fuji MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/fuji.rs:553` This site is part of Fuji MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/fuji.rs:555` This site is part of Fuji MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/fuji.rs:556` This site is part of Fuji MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/fuji.rs:567` This site is part of Fuji MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/fuji.rs:576` This site is part of Fuji MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/fuji.rs:584` This site is part of Fuji MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/fuji.rs:585` This site is part of Fuji MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/fuji.rs:586` This site is part of Fuji MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/fuji.rs:590` This site is part of Fuji MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/fuji.rs:599` This site is part of Fuji MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/fuji.rs:607` This site is part of Fuji MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/fuji.rs:609` This site is part of Fuji MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/fuji.rs:611` This site is part of Fuji MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/fuji.rs:622` This site is part of Fuji MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/fuji.rs:692` This site is part of Fuji MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/fuji.rs:702` This site is part of Fuji MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/fuji.rs:704` This site is part of Fuji MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/fuji.rs:706` This site is part of Fuji MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/fuji.rs:710` This site is part of Fuji MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/fuji.rs:718` This site is part of Fuji MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/fuji.rs:719` This site is part of Fuji MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/fuji.rs:721` This site is part of Fuji MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/fuji.rs:742` This site is part of Fuji MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/fuji.rs:750` This site is part of Fuji MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/fuji.rs:758` This site is part of Fuji MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/fuji.rs:760` This site is part of Fuji MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/fuji.rs:766` This site is part of Fuji MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/fuji.rs:768` This site is part of Fuji MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/fuji.rs:770` This site is part of Fuji MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/fuji.rs:775` This site is part of Fuji MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/fuji.rs:784` This site is part of Fuji MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/fuji.rs:789` This site is part of Fuji MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/fuji.rs:791` This site is part of Fuji MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/fuji.rs:795` This site is part of Fuji MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/fuji.rs:797` This site is part of Fuji MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/fuji.rs:799` This site is part of Fuji MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/fuji.rs:803` This site is part of Fuji MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/fuji.rs:806` This site is part of Fuji MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/fuji.rs:818` This site is part of Fuji MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/fuji.rs:821` This site is part of Fuji MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/fuji.rs:824` This site is part of Fuji MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/fuji.rs:827` This site is part of Fuji MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/fuji.rs:833` This site is part of Fuji MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/fuji.rs:837` This site is part of Fuji MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/fuji.rs:838` This site is part of Fuji MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/fuji.rs:845` This site is part of Fuji MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/fuji.rs:847` This site is part of Fuji MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/fuji.rs:849` This site is part of Fuji MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/fuji.rs:863` This site is part of Fuji MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/fuji.rs:868` This site is part of Fuji MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/fuji.rs:874` This site is part of Fuji MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/fuji.rs:876` This site is part of Fuji MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/fuji.rs:880` This site is part of Fuji MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/fuji.rs:894` This site is part of Fuji MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/fuji.rs:897` This site is part of Fuji MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/fuji.rs:902` This site is part of Fuji MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/fuji.rs:912` This site is part of Fuji MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/fuji.rs:915` This site is part of Fuji MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/fuji.rs:920` This site is part of Fuji MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/fuji.rs:924` This site is part of Fuji MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/fuji.rs:929` This site is part of Fuji MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/fuji.rs:932` This site is part of Fuji MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/fuji.rs:936` This site is part of Fuji MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/fuji.rs:941` This site is part of Fuji MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/fuji.rs:944` This site is part of Fuji MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/fuji.rs:947` This site is part of Fuji MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/fuji.rs:952` This site is part of Fuji MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/fuji.rs:955` This site is part of Fuji MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/fuji.rs:958` This site is part of Fuji MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/fuji.rs:963` This site is part of Fuji MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/fuji.rs:966` This site is part of Fuji MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/fuji.rs:969` This site is part of Fuji MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/fuji.rs:978` This site is part of Fuji MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/fuji.rs:979` This site is part of Fuji MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/fuji.rs:980` This site is part of Fuji MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/fuji.rs:981` This site is part of Fuji MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/fuji.rs:982` This site is part of Fuji MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/fuji.rs:983` This site is part of Fuji MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/fuji.rs:984` This site is part of Fuji MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/fuji.rs:989` This site is part of Fuji MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/fuji.rs:1002` This site is part of Fuji MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/fuji.rs:1005` This site is part of Fuji MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/fuji.rs:1009` This site is part of Fuji MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/fuji.rs:1010` This site is part of Fuji MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/fuji.rs:1014` This site is part of Fuji MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/fuji.rs:1018` This site is part of Fuji MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/fuji.rs:1023` This site is part of Fuji MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/fuji.rs:1029` This site is part of Fuji MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/fuji.rs:1032` This site is part of Fuji MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/fuji.rs:1049` This site is part of Fuji MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+
+#### safe/src/mnote/mod.rs
+- `safe/src/mnote/mod.rs:19` This site dispatches MakerNote parsing or save preparation over raw ExifData and ExifEntry pointers.
+- `safe/src/mnote/mod.rs:24` This site dispatches MakerNote parsing or save preparation over raw ExifData and ExifEntry pointers.
+- `safe/src/mnote/mod.rs:25` This site dispatches MakerNote parsing or save preparation over raw ExifData and ExifEntry pointers.
+- `safe/src/mnote/mod.rs:34` This site dispatches MakerNote parsing or save preparation over raw ExifData and ExifEntry pointers.
+- `safe/src/mnote/mod.rs:35` This site dispatches MakerNote parsing or save preparation over raw ExifData and ExifEntry pointers.
+- `safe/src/mnote/mod.rs:44` This site dispatches MakerNote parsing or save preparation over raw ExifData and ExifEntry pointers.
+- `safe/src/mnote/mod.rs:49` This site dispatches MakerNote parsing or save preparation over raw ExifData and ExifEntry pointers.
+- `safe/src/mnote/mod.rs:50` This site dispatches MakerNote parsing or save preparation over raw ExifData and ExifEntry pointers.
+- `safe/src/mnote/mod.rs:52` This site dispatches MakerNote parsing or save preparation over raw ExifData and ExifEntry pointers.
+- `safe/src/mnote/mod.rs:53` This site dispatches MakerNote parsing or save preparation over raw ExifData and ExifEntry pointers.
+- `safe/src/mnote/mod.rs:55` This site dispatches MakerNote parsing or save preparation over raw ExifData and ExifEntry pointers.
+- `safe/src/mnote/mod.rs:56` This site dispatches MakerNote parsing or save preparation over raw ExifData and ExifEntry pointers.
+- `safe/src/mnote/mod.rs:58` This site dispatches MakerNote parsing or save preparation over raw ExifData and ExifEntry pointers.
+- `safe/src/mnote/mod.rs:59` This site dispatches MakerNote parsing or save preparation over raw ExifData and ExifEntry pointers.
+- `safe/src/mnote/mod.rs:61` This site dispatches MakerNote parsing or save preparation over raw ExifData and ExifEntry pointers.
+- `safe/src/mnote/mod.rs:62` This site dispatches MakerNote parsing or save preparation over raw ExifData and ExifEntry pointers.
+- `safe/src/mnote/mod.rs:64` This site dispatches MakerNote parsing or save preparation over raw ExifData and ExifEntry pointers.
+- `safe/src/mnote/mod.rs:65` This site dispatches MakerNote parsing or save preparation over raw ExifData and ExifEntry pointers.
+- `safe/src/mnote/mod.rs:71` This site dispatches MakerNote parsing or save preparation over raw ExifData and ExifEntry pointers.
+- `safe/src/mnote/mod.rs:80` This site dispatches MakerNote parsing or save preparation over raw ExifData and ExifEntry pointers.
+- `safe/src/mnote/mod.rs:85` This site dispatches MakerNote parsing or save preparation over raw ExifData and ExifEntry pointers.
+- `safe/src/mnote/mod.rs:86` This site dispatches MakerNote parsing or save preparation over raw ExifData and ExifEntry pointers.
+- `safe/src/mnote/mod.rs:91` This site dispatches MakerNote parsing or save preparation over raw ExifData and ExifEntry pointers.
+- `safe/src/mnote/mod.rs:102` This site dispatches MakerNote parsing or save preparation over raw ExifData and ExifEntry pointers.
+- `safe/src/mnote/mod.rs:109` This site dispatches MakerNote parsing or save preparation over raw ExifData and ExifEntry pointers.
+- `safe/src/mnote/mod.rs:110` This site dispatches MakerNote parsing or save preparation over raw ExifData and ExifEntry pointers.
+- `safe/src/mnote/mod.rs:117` This site dispatches MakerNote parsing or save preparation over raw ExifData and ExifEntry pointers.
+- `safe/src/mnote/mod.rs:122` This site dispatches MakerNote parsing or save preparation over raw ExifData and ExifEntry pointers.
+
+#### safe/src/mnote/olympus.rs
+- `safe/src/mnote/olympus.rs:537` This site is part of Olympus, Nikon, or Sanyo MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/olympus.rs:1655` This site is part of Olympus, Nikon, or Sanyo MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/olympus.rs:1656` This site is part of Olympus, Nikon, or Sanyo MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/olympus.rs:1666` This site is part of Olympus, Nikon, or Sanyo MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/olympus.rs:1667` This site is part of Olympus, Nikon, or Sanyo MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/olympus.rs:1678` This site is part of Olympus, Nikon, or Sanyo MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/olympus.rs:1682` This site is part of Olympus, Nikon, or Sanyo MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/olympus.rs:1683` This site is part of Olympus, Nikon, or Sanyo MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/olympus.rs:1684` This site is part of Olympus, Nikon, or Sanyo MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/olympus.rs:1685` This site is part of Olympus, Nikon, or Sanyo MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/olympus.rs:1686` This site is part of Olympus, Nikon, or Sanyo MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/olympus.rs:1692` This site is part of Olympus, Nikon, or Sanyo MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/olympus.rs:1700` This site is part of Olympus, Nikon, or Sanyo MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/olympus.rs:1701` This site is part of Olympus, Nikon, or Sanyo MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/olympus.rs:1704` This site is part of Olympus, Nikon, or Sanyo MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/olympus.rs:1711` This site is part of Olympus, Nikon, or Sanyo MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/olympus.rs:1714` This site is part of Olympus, Nikon, or Sanyo MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/olympus.rs:1717` This site is part of Olympus, Nikon, or Sanyo MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/olympus.rs:1730` This site is part of Olympus, Nikon, or Sanyo MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/olympus.rs:1731` This site is part of Olympus, Nikon, or Sanyo MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/olympus.rs:1732` This site is part of Olympus, Nikon, or Sanyo MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/olympus.rs:1750` This site is part of Olympus, Nikon, or Sanyo MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/olympus.rs:1771` This site is part of Olympus, Nikon, or Sanyo MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/olympus.rs:1792` This site is part of Olympus, Nikon, or Sanyo MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/olympus.rs:1824` This site is part of Olympus, Nikon, or Sanyo MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/olympus.rs:1831` This site is part of Olympus, Nikon, or Sanyo MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/olympus.rs:1832` This site is part of Olympus, Nikon, or Sanyo MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/olympus.rs:1834` This site is part of Olympus, Nikon, or Sanyo MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/olympus.rs:1856` This site is part of Olympus, Nikon, or Sanyo MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/olympus.rs:1861` This site is part of Olympus, Nikon, or Sanyo MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/olympus.rs:1865` This site is part of Olympus, Nikon, or Sanyo MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/olympus.rs:1871` This site is part of Olympus, Nikon, or Sanyo MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/olympus.rs:1883` This site is part of Olympus, Nikon, or Sanyo MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/olympus.rs:1885` This site is part of Olympus, Nikon, or Sanyo MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/olympus.rs:1887` This site is part of Olympus, Nikon, or Sanyo MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/olympus.rs:1892` This site is part of Olympus, Nikon, or Sanyo MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/olympus.rs:1901` This site is part of Olympus, Nikon, or Sanyo MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/olympus.rs:1906` This site is part of Olympus, Nikon, or Sanyo MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/olympus.rs:1910` This site is part of Olympus, Nikon, or Sanyo MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/olympus.rs:1914` This site is part of Olympus, Nikon, or Sanyo MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/olympus.rs:1915` This site is part of Olympus, Nikon, or Sanyo MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/olympus.rs:1917` This site is part of Olympus, Nikon, or Sanyo MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/olympus.rs:1918` This site is part of Olympus, Nikon, or Sanyo MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/olympus.rs:1926` This site is part of Olympus, Nikon, or Sanyo MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/olympus.rs:1928` This site is part of Olympus, Nikon, or Sanyo MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/olympus.rs:1943` This site is part of Olympus, Nikon, or Sanyo MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/olympus.rs:1944` This site is part of Olympus, Nikon, or Sanyo MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/olympus.rs:1956` This site is part of Olympus, Nikon, or Sanyo MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/olympus.rs:1958` This site is part of Olympus, Nikon, or Sanyo MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/olympus.rs:1974` This site is part of Olympus, Nikon, or Sanyo MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/olympus.rs:1975` This site is part of Olympus, Nikon, or Sanyo MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/olympus.rs:1993` This site is part of Olympus, Nikon, or Sanyo MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/olympus.rs:1995` This site is part of Olympus, Nikon, or Sanyo MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/olympus.rs:1998` This site is part of Olympus, Nikon, or Sanyo MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/olympus.rs:2011` This site is part of Olympus, Nikon, or Sanyo MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/olympus.rs:2014` This site is part of Olympus, Nikon, or Sanyo MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/olympus.rs:2017` This site is part of Olympus, Nikon, or Sanyo MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/olympus.rs:2029` This site is part of Olympus, Nikon, or Sanyo MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/olympus.rs:2031` This site is part of Olympus, Nikon, or Sanyo MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/olympus.rs:2034` This site is part of Olympus, Nikon, or Sanyo MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/olympus.rs:2037` This site is part of Olympus, Nikon, or Sanyo MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/olympus.rs:2043` This site is part of Olympus, Nikon, or Sanyo MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/olympus.rs:2046` This site is part of Olympus, Nikon, or Sanyo MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/olympus.rs:2047` This site is part of Olympus, Nikon, or Sanyo MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/olympus.rs:2055` This site is part of Olympus, Nikon, or Sanyo MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/olympus.rs:2057` This site is part of Olympus, Nikon, or Sanyo MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/olympus.rs:2059` This site is part of Olympus, Nikon, or Sanyo MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/olympus.rs:2072` This site is part of Olympus, Nikon, or Sanyo MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/olympus.rs:2077` This site is part of Olympus, Nikon, or Sanyo MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/olympus.rs:2081` This site is part of Olympus, Nikon, or Sanyo MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/olympus.rs:2085` This site is part of Olympus, Nikon, or Sanyo MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/olympus.rs:2098` This site is part of Olympus, Nikon, or Sanyo MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/olympus.rs:2101` This site is part of Olympus, Nikon, or Sanyo MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/olympus.rs:2105` This site is part of Olympus, Nikon, or Sanyo MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/olympus.rs:2113` This site is part of Olympus, Nikon, or Sanyo MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/olympus.rs:2116` This site is part of Olympus, Nikon, or Sanyo MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/olympus.rs:2121` This site is part of Olympus, Nikon, or Sanyo MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/olympus.rs:2125` This site is part of Olympus, Nikon, or Sanyo MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/olympus.rs:2130` This site is part of Olympus, Nikon, or Sanyo MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/olympus.rs:2133` This site is part of Olympus, Nikon, or Sanyo MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/olympus.rs:2137` This site is part of Olympus, Nikon, or Sanyo MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/olympus.rs:2142` This site is part of Olympus, Nikon, or Sanyo MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/olympus.rs:2145` This site is part of Olympus, Nikon, or Sanyo MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/olympus.rs:2149` This site is part of Olympus, Nikon, or Sanyo MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/olympus.rs:2154` This site is part of Olympus, Nikon, or Sanyo MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/olympus.rs:2157` This site is part of Olympus, Nikon, or Sanyo MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/olympus.rs:2161` This site is part of Olympus, Nikon, or Sanyo MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/olympus.rs:2166` This site is part of Olympus, Nikon, or Sanyo MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/olympus.rs:2169` This site is part of Olympus, Nikon, or Sanyo MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/olympus.rs:2174` This site is part of Olympus, Nikon, or Sanyo MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/olympus.rs:2182` This site is part of Olympus, Nikon, or Sanyo MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/olympus.rs:2183` This site is part of Olympus, Nikon, or Sanyo MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/olympus.rs:2184` This site is part of Olympus, Nikon, or Sanyo MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/olympus.rs:2185` This site is part of Olympus, Nikon, or Sanyo MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/olympus.rs:2186` This site is part of Olympus, Nikon, or Sanyo MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/olympus.rs:2187` This site is part of Olympus, Nikon, or Sanyo MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/olympus.rs:2188` This site is part of Olympus, Nikon, or Sanyo MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/olympus.rs:2192` This site is part of Olympus, Nikon, or Sanyo MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/olympus.rs:2205` This site is part of Olympus, Nikon, or Sanyo MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/olympus.rs:2208` This site is part of Olympus, Nikon, or Sanyo MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/olympus.rs:2212` This site is part of Olympus, Nikon, or Sanyo MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/olympus.rs:2218` This site is part of Olympus, Nikon, or Sanyo MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/olympus.rs:2240` This site is part of Olympus, Nikon, or Sanyo MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/olympus.rs:2248` This site is part of Olympus, Nikon, or Sanyo MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/olympus.rs:2252` This site is part of Olympus, Nikon, or Sanyo MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/olympus.rs:2257` This site is part of Olympus, Nikon, or Sanyo MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/olympus.rs:2260` This site is part of Olympus, Nikon, or Sanyo MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/olympus.rs:2268` This site is part of Olympus, Nikon, or Sanyo MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/olympus.rs:2279` This site is part of Olympus, Nikon, or Sanyo MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/olympus.rs:2283` This site is part of Olympus, Nikon, or Sanyo MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/olympus.rs:2288` This site is part of Olympus, Nikon, or Sanyo MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/olympus.rs:2291` This site is part of Olympus, Nikon, or Sanyo MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/olympus.rs:2306` This site is part of Olympus, Nikon, or Sanyo MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/olympus.rs:2310` This site is part of Olympus, Nikon, or Sanyo MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/olympus.rs:2311` This site is part of Olympus, Nikon, or Sanyo MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/olympus.rs:2323` This site is part of Olympus, Nikon, or Sanyo MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/olympus.rs:2328` This site is part of Olympus, Nikon, or Sanyo MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+
+#### safe/src/mnote/pentax.rs
+- `safe/src/mnote/pentax.rs:1028` This site is part of Pentax or Casio MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/pentax.rs:1174` This site is part of Pentax or Casio MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/pentax.rs:1175` This site is part of Pentax or Casio MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/pentax.rs:1185` This site is part of Pentax or Casio MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/pentax.rs:1186` This site is part of Pentax or Casio MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/pentax.rs:1197` This site is part of Pentax or Casio MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/pentax.rs:1202` This site is part of Pentax or Casio MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/pentax.rs:1203` This site is part of Pentax or Casio MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/pentax.rs:1204` This site is part of Pentax or Casio MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/pentax.rs:1205` This site is part of Pentax or Casio MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/pentax.rs:1206` This site is part of Pentax or Casio MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/pentax.rs:1212` This site is part of Pentax or Casio MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/pentax.rs:1220` This site is part of Pentax or Casio MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/pentax.rs:1221` This site is part of Pentax or Casio MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/pentax.rs:1224` This site is part of Pentax or Casio MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/pentax.rs:1236` This site is part of Pentax or Casio MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/pentax.rs:1237` This site is part of Pentax or Casio MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/pentax.rs:1238` This site is part of Pentax or Casio MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/pentax.rs:1243` This site is part of Pentax or Casio MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/pentax.rs:1245` This site is part of Pentax or Casio MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/pentax.rs:1248` This site is part of Pentax or Casio MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/pentax.rs:1253` This site is part of Pentax or Casio MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/pentax.rs:1254` This site is part of Pentax or Casio MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/pentax.rs:1267` This site is part of Pentax or Casio MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/pentax.rs:1271` This site is part of Pentax or Casio MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/pentax.rs:1278` This site is part of Pentax or Casio MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/pentax.rs:1281` This site is part of Pentax or Casio MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/pentax.rs:1282` This site is part of Pentax or Casio MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/pentax.rs:1284` This site is part of Pentax or Casio MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/pentax.rs:1310` This site is part of Pentax or Casio MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/pentax.rs:1315` This site is part of Pentax or Casio MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/pentax.rs:1319` This site is part of Pentax or Casio MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/pentax.rs:1325` This site is part of Pentax or Casio MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/pentax.rs:1337` This site is part of Pentax or Casio MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/pentax.rs:1339` This site is part of Pentax or Casio MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/pentax.rs:1341` This site is part of Pentax or Casio MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/pentax.rs:1345` This site is part of Pentax or Casio MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/pentax.rs:1347` This site is part of Pentax or Casio MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/pentax.rs:1350` This site is part of Pentax or Casio MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/pentax.rs:1353` This site is part of Pentax or Casio MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/pentax.rs:1362` This site is part of Pentax or Casio MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/pentax.rs:1367` This site is part of Pentax or Casio MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/pentax.rs:1369` This site is part of Pentax or Casio MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/pentax.rs:1373` This site is part of Pentax or Casio MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/pentax.rs:1377` This site is part of Pentax or Casio MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/pentax.rs:1382` This site is part of Pentax or Casio MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/pentax.rs:1387` This site is part of Pentax or Casio MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/pentax.rs:1392` This site is part of Pentax or Casio MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/pentax.rs:1396` This site is part of Pentax or Casio MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/pentax.rs:1399` This site is part of Pentax or Casio MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/pentax.rs:1402` This site is part of Pentax or Casio MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/pentax.rs:1414` This site is part of Pentax or Casio MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/pentax.rs:1416` This site is part of Pentax or Casio MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/pentax.rs:1419` This site is part of Pentax or Casio MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/pentax.rs:1422` This site is part of Pentax or Casio MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/pentax.rs:1428` This site is part of Pentax or Casio MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/pentax.rs:1432` This site is part of Pentax or Casio MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/pentax.rs:1433` This site is part of Pentax or Casio MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/pentax.rs:1441` This site is part of Pentax or Casio MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/pentax.rs:1443` This site is part of Pentax or Casio MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/pentax.rs:1445` This site is part of Pentax or Casio MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/pentax.rs:1458` This site is part of Pentax or Casio MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/pentax.rs:1462` This site is part of Pentax or Casio MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/pentax.rs:1466` This site is part of Pentax or Casio MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/pentax.rs:1469` This site is part of Pentax or Casio MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/pentax.rs:1482` This site is part of Pentax or Casio MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/pentax.rs:1485` This site is part of Pentax or Casio MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/pentax.rs:1489` This site is part of Pentax or Casio MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/pentax.rs:1497` This site is part of Pentax or Casio MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/pentax.rs:1500` This site is part of Pentax or Casio MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/pentax.rs:1505` This site is part of Pentax or Casio MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/pentax.rs:1509` This site is part of Pentax or Casio MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/pentax.rs:1514` This site is part of Pentax or Casio MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/pentax.rs:1517` This site is part of Pentax or Casio MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/pentax.rs:1521` This site is part of Pentax or Casio MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/pentax.rs:1526` This site is part of Pentax or Casio MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/pentax.rs:1529` This site is part of Pentax or Casio MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/pentax.rs:1533` This site is part of Pentax or Casio MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/pentax.rs:1538` This site is part of Pentax or Casio MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/pentax.rs:1541` This site is part of Pentax or Casio MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/pentax.rs:1545` This site is part of Pentax or Casio MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/pentax.rs:1550` This site is part of Pentax or Casio MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/pentax.rs:1557` This site is part of Pentax or Casio MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/pentax.rs:1560` This site is part of Pentax or Casio MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/pentax.rs:1564` This site is part of Pentax or Casio MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/pentax.rs:1572` This site is part of Pentax or Casio MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/pentax.rs:1573` This site is part of Pentax or Casio MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/pentax.rs:1574` This site is part of Pentax or Casio MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/pentax.rs:1575` This site is part of Pentax or Casio MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/pentax.rs:1576` This site is part of Pentax or Casio MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/pentax.rs:1577` This site is part of Pentax or Casio MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/pentax.rs:1578` This site is part of Pentax or Casio MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/pentax.rs:1582` This site is part of Pentax or Casio MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/pentax.rs:1595` This site is part of Pentax or Casio MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/pentax.rs:1599` This site is part of Pentax or Casio MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/pentax.rs:1601` This site is part of Pentax or Casio MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/pentax.rs:1614` This site is part of Pentax or Casio MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/pentax.rs:1622` This site is part of Pentax or Casio MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/pentax.rs:1626` This site is part of Pentax or Casio MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/pentax.rs:1631` This site is part of Pentax or Casio MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/pentax.rs:1634` This site is part of Pentax or Casio MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/pentax.rs:1649` This site is part of Pentax or Casio MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/pentax.rs:1653` This site is part of Pentax or Casio MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/pentax.rs:1654` This site is part of Pentax or Casio MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/pentax.rs:1658` This site is part of Pentax or Casio MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/pentax.rs:1663` This site is part of Pentax or Casio MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/pentax.rs:1817` This site is part of Pentax or Casio MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/pentax.rs:1824` This site is part of Pentax or Casio MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+- `safe/src/mnote/pentax.rs:1827` This site is part of Pentax or Casio MakerNote parsing, formatting, or allocation over raw C-layout buffers.
+
+#### safe/src/object/content.rs
+- `safe/src/object/content.rs:29` This site mutates or traverses raw ExifContent state behind C-layout pointers.
+- `safe/src/object/content.rs:30` This site mutates or traverses raw ExifContent state behind C-layout pointers.
+- `safe/src/object/content.rs:34` This site mutates or traverses raw ExifContent state behind C-layout pointers.
+- `safe/src/object/content.rs:35` This site mutates or traverses raw ExifContent state behind C-layout pointers.
+- `safe/src/object/content.rs:38` This site mutates or traverses raw ExifContent state behind C-layout pointers.
+- `safe/src/object/content.rs:42` This site mutates or traverses raw ExifContent state behind C-layout pointers.
+- `safe/src/object/content.rs:47` This site mutates or traverses raw ExifContent state behind C-layout pointers.
+- `safe/src/object/content.rs:52` This site mutates or traverses raw ExifContent state behind C-layout pointers.
+- `safe/src/object/content.rs:56` This site mutates or traverses raw ExifContent state behind C-layout pointers.
+- `safe/src/object/content.rs:59` This site mutates or traverses raw ExifContent state behind C-layout pointers.
+- `safe/src/object/content.rs:62` This site mutates or traverses raw ExifContent state behind C-layout pointers.
+- `safe/src/object/content.rs:78` This site mutates or traverses raw ExifContent state behind C-layout pointers.
+- `safe/src/object/content.rs:79` This site mutates or traverses raw ExifContent state behind C-layout pointers.
+- `safe/src/object/content.rs:80` This site mutates or traverses raw ExifContent state behind C-layout pointers.
+- `safe/src/object/content.rs:81` This site mutates or traverses raw ExifContent state behind C-layout pointers.
+- `safe/src/object/content.rs:85` This site mutates or traverses raw ExifContent state behind C-layout pointers.
+- `safe/src/object/content.rs:86` This site mutates or traverses raw ExifContent state behind C-layout pointers.
+- `safe/src/object/content.rs:90` This site mutates or traverses raw ExifContent state behind C-layout pointers.
+- `safe/src/object/content.rs:94` This site mutates or traverses raw ExifContent state behind C-layout pointers.
+- `safe/src/object/content.rs:95` This site mutates or traverses raw ExifContent state behind C-layout pointers.
+- `safe/src/object/content.rs:99` This site mutates or traverses raw ExifContent state behind C-layout pointers.
+- `safe/src/object/content.rs:102` This site mutates or traverses raw ExifContent state behind C-layout pointers.
+- `safe/src/object/content.rs:106` This site mutates or traverses raw ExifContent state behind C-layout pointers.
+- `safe/src/object/content.rs:111` This site mutates or traverses raw ExifContent state behind C-layout pointers.
+- `safe/src/object/content.rs:113` This site mutates or traverses raw ExifContent state behind C-layout pointers.
+- `safe/src/object/content.rs:114` This site mutates or traverses raw ExifContent state behind C-layout pointers.
+- `safe/src/object/content.rs:115` This site mutates or traverses raw ExifContent state behind C-layout pointers.
+- `safe/src/object/content.rs:116` This site mutates or traverses raw ExifContent state behind C-layout pointers.
+- `safe/src/object/content.rs:118` This site mutates or traverses raw ExifContent state behind C-layout pointers.
+- `safe/src/object/content.rs:121` This site mutates or traverses raw ExifContent state behind C-layout pointers.
+- `safe/src/object/content.rs:122` This site mutates or traverses raw ExifContent state behind C-layout pointers.
+- `safe/src/object/content.rs:123` This site mutates or traverses raw ExifContent state behind C-layout pointers.
+- `safe/src/object/content.rs:124` This site mutates or traverses raw ExifContent state behind C-layout pointers.
+- `safe/src/object/content.rs:127` This site mutates or traverses raw ExifContent state behind C-layout pointers.
+- `safe/src/object/content.rs:128` This site mutates or traverses raw ExifContent state behind C-layout pointers.
+- `safe/src/object/content.rs:131` This site mutates or traverses raw ExifContent state behind C-layout pointers.
+- `safe/src/object/content.rs:133` This site mutates or traverses raw ExifContent state behind C-layout pointers.
+- `safe/src/object/content.rs:135` This site mutates or traverses raw ExifContent state behind C-layout pointers.
+- `safe/src/object/content.rs:140` This site mutates or traverses raw ExifContent state behind C-layout pointers.
+- `safe/src/object/content.rs:144` This site mutates or traverses raw ExifContent state behind C-layout pointers.
+- `safe/src/object/content.rs:149` This site mutates or traverses raw ExifContent state behind C-layout pointers.
+- `safe/src/object/content.rs:155` This site mutates or traverses raw ExifContent state behind C-layout pointers.
+- `safe/src/object/content.rs:159` This site mutates or traverses raw ExifContent state behind C-layout pointers.
+- `safe/src/object/content.rs:164` This site mutates or traverses raw ExifContent state behind C-layout pointers.
+- `safe/src/object/content.rs:172` This site mutates or traverses raw ExifContent state behind C-layout pointers.
+- `safe/src/object/content.rs:176` This site mutates or traverses raw ExifContent state behind C-layout pointers.
+- `safe/src/object/content.rs:180` This site mutates or traverses raw ExifContent state behind C-layout pointers.
+- `safe/src/object/content.rs:189` This site mutates or traverses raw ExifContent state behind C-layout pointers.
+- `safe/src/object/content.rs:201` This site mutates or traverses raw ExifContent state behind C-layout pointers.
+- `safe/src/object/content.rs:208` This site mutates or traverses raw ExifContent state behind C-layout pointers.
+- `safe/src/object/content.rs:213` This site mutates or traverses raw ExifContent state behind C-layout pointers.
+- `safe/src/object/content.rs:215` This site mutates or traverses raw ExifContent state behind C-layout pointers.
+- `safe/src/object/content.rs:220` This site mutates or traverses raw ExifContent state behind C-layout pointers.
+- `safe/src/object/content.rs:221` This site mutates or traverses raw ExifContent state behind C-layout pointers.
+- `safe/src/object/content.rs:228` This site mutates or traverses raw ExifContent state behind C-layout pointers.
+- `safe/src/object/content.rs:239` This site mutates or traverses raw ExifContent state behind C-layout pointers.
+- `safe/src/object/content.rs:251` This site mutates or traverses raw ExifContent state behind C-layout pointers.
+- `safe/src/object/content.rs:259` This site mutates or traverses raw ExifContent state behind C-layout pointers.
+- `safe/src/object/content.rs:265` This site mutates or traverses raw ExifContent state behind C-layout pointers.
+- `safe/src/object/content.rs:273` This site mutates or traverses raw ExifContent state behind C-layout pointers.
+- `safe/src/object/content.rs:274` This site mutates or traverses raw ExifContent state behind C-layout pointers.
+- `safe/src/object/content.rs:280` This site mutates or traverses raw ExifContent state behind C-layout pointers.
+- `safe/src/object/content.rs:281` This site mutates or traverses raw ExifContent state behind C-layout pointers.
+- `safe/src/object/content.rs:289` This site mutates or traverses raw ExifContent state behind C-layout pointers.
+- `safe/src/object/content.rs:301` This site mutates or traverses raw ExifContent state behind C-layout pointers.
+- `safe/src/object/content.rs:302` This site mutates or traverses raw ExifContent state behind C-layout pointers.
+- `safe/src/object/content.rs:308` This site mutates or traverses raw ExifContent state behind C-layout pointers.
+- `safe/src/object/content.rs:312` This site mutates or traverses raw ExifContent state behind C-layout pointers.
+- `safe/src/object/content.rs:314` This site mutates or traverses raw ExifContent state behind C-layout pointers.
+- `safe/src/object/content.rs:316` This site mutates or traverses raw ExifContent state behind C-layout pointers.
+- `safe/src/object/content.rs:321` This site mutates or traverses raw ExifContent state behind C-layout pointers.
+- `safe/src/object/content.rs:322` This site mutates or traverses raw ExifContent state behind C-layout pointers.
+- `safe/src/object/content.rs:324` This site mutates or traverses raw ExifContent state behind C-layout pointers.
+- `safe/src/object/content.rs:327` This site mutates or traverses raw ExifContent state behind C-layout pointers.
+- `safe/src/object/content.rs:328` This site mutates or traverses raw ExifContent state behind C-layout pointers.
+- `safe/src/object/content.rs:332` This site mutates or traverses raw ExifContent state behind C-layout pointers.
+- `safe/src/object/content.rs:333` This site mutates or traverses raw ExifContent state behind C-layout pointers.
+- `safe/src/object/content.rs:350` This site mutates or traverses raw ExifContent state behind C-layout pointers.
+- `safe/src/object/content.rs:351` This site mutates or traverses raw ExifContent state behind C-layout pointers.
+- `safe/src/object/content.rs:354` This site mutates or traverses raw ExifContent state behind C-layout pointers.
+- `safe/src/object/content.rs:355` This site mutates or traverses raw ExifContent state behind C-layout pointers.
+- `safe/src/object/content.rs:359` This site mutates or traverses raw ExifContent state behind C-layout pointers.
+- `safe/src/object/content.rs:360` This site mutates or traverses raw ExifContent state behind C-layout pointers.
+- `safe/src/object/content.rs:361` This site mutates or traverses raw ExifContent state behind C-layout pointers.
+- `safe/src/object/content.rs:364` This site mutates or traverses raw ExifContent state behind C-layout pointers.
+- `safe/src/object/content.rs:368` This site mutates or traverses raw ExifContent state behind C-layout pointers.
+- `safe/src/object/content.rs:373` This site mutates or traverses raw ExifContent state behind C-layout pointers.
+- `safe/src/object/content.rs:374` This site mutates or traverses raw ExifContent state behind C-layout pointers.
+- `safe/src/object/content.rs:376` This site mutates or traverses raw ExifContent state behind C-layout pointers.
+- `safe/src/object/content.rs:381` This site mutates or traverses raw ExifContent state behind C-layout pointers.
+- `safe/src/object/content.rs:382` This site mutates or traverses raw ExifContent state behind C-layout pointers.
+- `safe/src/object/content.rs:389` This site mutates or traverses raw ExifContent state behind C-layout pointers.
+- `safe/src/object/content.rs:402` This site mutates or traverses raw ExifContent state behind C-layout pointers.
+- `safe/src/object/content.rs:406` This site mutates or traverses raw ExifContent state behind C-layout pointers.
+- `safe/src/object/content.rs:410` This site mutates or traverses raw ExifContent state behind C-layout pointers.
+- `safe/src/object/content.rs:418` This site mutates or traverses raw ExifContent state behind C-layout pointers.
+- `safe/src/object/content.rs:427` This site mutates or traverses raw ExifContent state behind C-layout pointers.
+- `safe/src/object/content.rs:430` This site mutates or traverses raw ExifContent state behind C-layout pointers.
+- `safe/src/object/content.rs:431` This site mutates or traverses raw ExifContent state behind C-layout pointers.
+- `safe/src/object/content.rs:436` This site mutates or traverses raw ExifContent state behind C-layout pointers.
+- `safe/src/object/content.rs:444` This site mutates or traverses raw ExifContent state behind C-layout pointers.
+- `safe/src/object/content.rs:448` This site mutates or traverses raw ExifContent state behind C-layout pointers.
+- `safe/src/object/content.rs:449` This site mutates or traverses raw ExifContent state behind C-layout pointers.
+- `safe/src/object/content.rs:455` This site mutates or traverses raw ExifContent state behind C-layout pointers.
+- `safe/src/object/content.rs:456` This site mutates or traverses raw ExifContent state behind C-layout pointers.
+- `safe/src/object/content.rs:460` This site mutates or traverses raw ExifContent state behind C-layout pointers.
+- `safe/src/object/content.rs:461` This site mutates or traverses raw ExifContent state behind C-layout pointers.
+- `safe/src/object/content.rs:465` This site mutates or traverses raw ExifContent state behind C-layout pointers.
+- `safe/src/object/content.rs:466` This site mutates or traverses raw ExifContent state behind C-layout pointers.
+- `safe/src/object/content.rs:470` This site mutates or traverses raw ExifContent state behind C-layout pointers.
+- `safe/src/object/content.rs:471` This site mutates or traverses raw ExifContent state behind C-layout pointers.
+- `safe/src/object/content.rs:475` This site mutates or traverses raw ExifContent state behind C-layout pointers.
+- `safe/src/object/content.rs:479` This site mutates or traverses raw ExifContent state behind C-layout pointers.
+- `safe/src/object/content.rs:483` This site mutates or traverses raw ExifContent state behind C-layout pointers.
+- `safe/src/object/content.rs:487` This site mutates or traverses raw ExifContent state behind C-layout pointers.
+- `safe/src/object/content.rs:493` This site mutates or traverses raw ExifContent state behind C-layout pointers.
+- `safe/src/object/content.rs:494` This site mutates or traverses raw ExifContent state behind C-layout pointers.
+- `safe/src/object/content.rs:498` This site mutates or traverses raw ExifContent state behind C-layout pointers.
+- `safe/src/object/content.rs:503` This site mutates or traverses raw ExifContent state behind C-layout pointers.
+- `safe/src/object/content.rs:509` This site mutates or traverses raw ExifContent state behind C-layout pointers.
+- `safe/src/object/content.rs:510` This site mutates or traverses raw ExifContent state behind C-layout pointers.
+- `safe/src/object/content.rs:516` This site mutates or traverses raw ExifContent state behind C-layout pointers.
+- `safe/src/object/content.rs:517` This site mutates or traverses raw ExifContent state behind C-layout pointers.
+- `safe/src/object/content.rs:521` This site mutates or traverses raw ExifContent state behind C-layout pointers.
+- `safe/src/object/content.rs:522` This site mutates or traverses raw ExifContent state behind C-layout pointers.
+
+#### safe/src/object/data.rs
+- `safe/src/object/data.rs:40` This site mutates or traverses raw ExifData state, including thumbnail or MakerNote ownership.
+- `safe/src/object/data.rs:41` This site mutates or traverses raw ExifData state, including thumbnail or MakerNote ownership.
+- `safe/src/object/data.rs:45` This site mutates or traverses raw ExifData state, including thumbnail or MakerNote ownership.
+- `safe/src/object/data.rs:46` This site mutates or traverses raw ExifData state, including thumbnail or MakerNote ownership.
+- `safe/src/object/data.rs:49` This site mutates or traverses raw ExifData state, including thumbnail or MakerNote ownership.
+- `safe/src/object/data.rs:53` This site mutates or traverses raw ExifData state, including thumbnail or MakerNote ownership.
+- `safe/src/object/data.rs:54` This site mutates or traverses raw ExifData state, including thumbnail or MakerNote ownership.
+- `safe/src/object/data.rs:57` This site mutates or traverses raw ExifData state, including thumbnail or MakerNote ownership.
+- `safe/src/object/data.rs:58` This site mutates or traverses raw ExifData state, including thumbnail or MakerNote ownership.
+- `safe/src/object/data.rs:61` This site mutates or traverses raw ExifData state, including thumbnail or MakerNote ownership.
+- `safe/src/object/data.rs:65` This site mutates or traverses raw ExifData state, including thumbnail or MakerNote ownership.
+- `safe/src/object/data.rs:66` This site mutates or traverses raw ExifData state, including thumbnail or MakerNote ownership.
+- `safe/src/object/data.rs:70` This site mutates or traverses raw ExifData state, including thumbnail or MakerNote ownership.
+- `safe/src/object/data.rs:75` This site mutates or traverses raw ExifData state, including thumbnail or MakerNote ownership.
+- `safe/src/object/data.rs:76` This site mutates or traverses raw ExifData state, including thumbnail or MakerNote ownership.
+- `safe/src/object/data.rs:81` This site mutates or traverses raw ExifData state, including thumbnail or MakerNote ownership.
+- `safe/src/object/data.rs:86` This site mutates or traverses raw ExifData state, including thumbnail or MakerNote ownership.
+- `safe/src/object/data.rs:87` This site mutates or traverses raw ExifData state, including thumbnail or MakerNote ownership.
+- `safe/src/object/data.rs:89` This site mutates or traverses raw ExifData state, including thumbnail or MakerNote ownership.
+- `safe/src/object/data.rs:95` This site mutates or traverses raw ExifData state, including thumbnail or MakerNote ownership.
+- `safe/src/object/data.rs:96` This site mutates or traverses raw ExifData state, including thumbnail or MakerNote ownership.
+- `safe/src/object/data.rs:100` This site mutates or traverses raw ExifData state, including thumbnail or MakerNote ownership.
+- `safe/src/object/data.rs:101` This site mutates or traverses raw ExifData state, including thumbnail or MakerNote ownership.
+- `safe/src/object/data.rs:108` This site mutates or traverses raw ExifData state, including thumbnail or MakerNote ownership.
+- `safe/src/object/data.rs:109` This site mutates or traverses raw ExifData state, including thumbnail or MakerNote ownership.
+- `safe/src/object/data.rs:118` This site mutates or traverses raw ExifData state, including thumbnail or MakerNote ownership.
+- `safe/src/object/data.rs:119` This site mutates or traverses raw ExifData state, including thumbnail or MakerNote ownership.
+- `safe/src/object/data.rs:122` This site mutates or traverses raw ExifData state, including thumbnail or MakerNote ownership.
+- `safe/src/object/data.rs:126` This site mutates or traverses raw ExifData state, including thumbnail or MakerNote ownership.
+- `safe/src/object/data.rs:127` This site mutates or traverses raw ExifData state, including thumbnail or MakerNote ownership.
+- `safe/src/object/data.rs:130` This site mutates or traverses raw ExifData state, including thumbnail or MakerNote ownership.
+- `safe/src/object/data.rs:134` This site mutates or traverses raw ExifData state, including thumbnail or MakerNote ownership.
+- `safe/src/object/data.rs:135` This site mutates or traverses raw ExifData state, including thumbnail or MakerNote ownership.
+- `safe/src/object/data.rs:139` This site mutates or traverses raw ExifData state, including thumbnail or MakerNote ownership.
+- `safe/src/object/data.rs:140` This site mutates or traverses raw ExifData state, including thumbnail or MakerNote ownership.
+- `safe/src/object/data.rs:151` This site mutates or traverses raw ExifData state, including thumbnail or MakerNote ownership.
+- `safe/src/object/data.rs:152` This site mutates or traverses raw ExifData state, including thumbnail or MakerNote ownership.
+- `safe/src/object/data.rs:155` This site mutates or traverses raw ExifData state, including thumbnail or MakerNote ownership.
+- `safe/src/object/data.rs:159` This site mutates or traverses raw ExifData state, including thumbnail or MakerNote ownership.
+- `safe/src/object/data.rs:160` This site mutates or traverses raw ExifData state, including thumbnail or MakerNote ownership.
+- `safe/src/object/data.rs:163` This site mutates or traverses raw ExifData state, including thumbnail or MakerNote ownership.
+- `safe/src/object/data.rs:167` This site mutates or traverses raw ExifData state, including thumbnail or MakerNote ownership.
+- `safe/src/object/data.rs:168` This site mutates or traverses raw ExifData state, including thumbnail or MakerNote ownership.
+- `safe/src/object/data.rs:171` This site mutates or traverses raw ExifData state, including thumbnail or MakerNote ownership.
+- `safe/src/object/data.rs:175` This site mutates or traverses raw ExifData state, including thumbnail or MakerNote ownership.
+- `safe/src/object/data.rs:181` This site mutates or traverses raw ExifData state, including thumbnail or MakerNote ownership.
+- `safe/src/object/data.rs:185` This site mutates or traverses raw ExifData state, including thumbnail or MakerNote ownership.
+- `safe/src/object/data.rs:189` This site mutates or traverses raw ExifData state, including thumbnail or MakerNote ownership.
+- `safe/src/object/data.rs:192` This site mutates or traverses raw ExifData state, including thumbnail or MakerNote ownership.
+- `safe/src/object/data.rs:196` This site mutates or traverses raw ExifData state, including thumbnail or MakerNote ownership.
+- `safe/src/object/data.rs:213` This site mutates or traverses raw ExifData state, including thumbnail or MakerNote ownership.
+- `safe/src/object/data.rs:215` This site mutates or traverses raw ExifData state, including thumbnail or MakerNote ownership.
+- `safe/src/object/data.rs:218` This site mutates or traverses raw ExifData state, including thumbnail or MakerNote ownership.
+- `safe/src/object/data.rs:224` This site mutates or traverses raw ExifData state, including thumbnail or MakerNote ownership.
+- `safe/src/object/data.rs:233` This site mutates or traverses raw ExifData state, including thumbnail or MakerNote ownership.
+- `safe/src/object/data.rs:234` This site mutates or traverses raw ExifData state, including thumbnail or MakerNote ownership.
+- `safe/src/object/data.rs:235` This site mutates or traverses raw ExifData state, including thumbnail or MakerNote ownership.
+- `safe/src/object/data.rs:236` This site mutates or traverses raw ExifData state, including thumbnail or MakerNote ownership.
+- `safe/src/object/data.rs:240` This site mutates or traverses raw ExifData state, including thumbnail or MakerNote ownership.
+- `safe/src/object/data.rs:244` This site mutates or traverses raw ExifData state, including thumbnail or MakerNote ownership.
+- `safe/src/object/data.rs:246` This site mutates or traverses raw ExifData state, including thumbnail or MakerNote ownership.
+- `safe/src/object/data.rs:251` This site mutates or traverses raw ExifData state, including thumbnail or MakerNote ownership.
+- `safe/src/object/data.rs:252` This site mutates or traverses raw ExifData state, including thumbnail or MakerNote ownership.
+- `safe/src/object/data.rs:256` This site mutates or traverses raw ExifData state, including thumbnail or MakerNote ownership.
+- `safe/src/object/data.rs:260` This site mutates or traverses raw ExifData state, including thumbnail or MakerNote ownership.
+- `safe/src/object/data.rs:261` This site mutates or traverses raw ExifData state, including thumbnail or MakerNote ownership.
+- `safe/src/object/data.rs:265` This site mutates or traverses raw ExifData state, including thumbnail or MakerNote ownership.
+- `safe/src/object/data.rs:268` This site mutates or traverses raw ExifData state, including thumbnail or MakerNote ownership.
+- `safe/src/object/data.rs:272` This site mutates or traverses raw ExifData state, including thumbnail or MakerNote ownership.
+- `safe/src/object/data.rs:277` This site mutates or traverses raw ExifData state, including thumbnail or MakerNote ownership.
+- `safe/src/object/data.rs:280` This site mutates or traverses raw ExifData state, including thumbnail or MakerNote ownership.
+- `safe/src/object/data.rs:282` This site mutates or traverses raw ExifData state, including thumbnail or MakerNote ownership.
+- `safe/src/object/data.rs:289` This site mutates or traverses raw ExifData state, including thumbnail or MakerNote ownership.
+- `safe/src/object/data.rs:290` This site mutates or traverses raw ExifData state, including thumbnail or MakerNote ownership.
+- `safe/src/object/data.rs:297` This site mutates or traverses raw ExifData state, including thumbnail or MakerNote ownership.
+- `safe/src/object/data.rs:298` This site mutates or traverses raw ExifData state, including thumbnail or MakerNote ownership.
+- `safe/src/object/data.rs:299` This site mutates or traverses raw ExifData state, including thumbnail or MakerNote ownership.
+- `safe/src/object/data.rs:312` This site mutates or traverses raw ExifData state, including thumbnail or MakerNote ownership.
+- `safe/src/object/data.rs:325` This site mutates or traverses raw ExifData state, including thumbnail or MakerNote ownership.
+- `safe/src/object/data.rs:329` This site mutates or traverses raw ExifData state, including thumbnail or MakerNote ownership.
+- `safe/src/object/data.rs:330` This site mutates or traverses raw ExifData state, including thumbnail or MakerNote ownership.
+- `safe/src/object/data.rs:334` This site mutates or traverses raw ExifData state, including thumbnail or MakerNote ownership.
+- `safe/src/object/data.rs:335` This site mutates or traverses raw ExifData state, including thumbnail or MakerNote ownership.
+- `safe/src/object/data.rs:340` This site mutates or traverses raw ExifData state, including thumbnail or MakerNote ownership.
+- `safe/src/object/data.rs:343` This site mutates or traverses raw ExifData state, including thumbnail or MakerNote ownership.
+- `safe/src/object/data.rs:378` This site mutates or traverses raw ExifData state, including thumbnail or MakerNote ownership.
+- `safe/src/object/data.rs:379` This site mutates or traverses raw ExifData state, including thumbnail or MakerNote ownership.
+- `safe/src/object/data.rs:383` This site mutates or traverses raw ExifData state, including thumbnail or MakerNote ownership.
+- `safe/src/object/data.rs:384` This site mutates or traverses raw ExifData state, including thumbnail or MakerNote ownership.
+- `safe/src/object/data.rs:386` This site mutates or traverses raw ExifData state, including thumbnail or MakerNote ownership.
+- `safe/src/object/data.rs:389` This site mutates or traverses raw ExifData state, including thumbnail or MakerNote ownership.
+- `safe/src/object/data.rs:393` This site mutates or traverses raw ExifData state, including thumbnail or MakerNote ownership.
+- `safe/src/object/data.rs:394` This site mutates or traverses raw ExifData state, including thumbnail or MakerNote ownership.
+- `safe/src/object/data.rs:398` This site mutates or traverses raw ExifData state, including thumbnail or MakerNote ownership.
+- `safe/src/object/data.rs:403` This site mutates or traverses raw ExifData state, including thumbnail or MakerNote ownership.
+- `safe/src/object/data.rs:404` This site mutates or traverses raw ExifData state, including thumbnail or MakerNote ownership.
+- `safe/src/object/data.rs:408` This site mutates or traverses raw ExifData state, including thumbnail or MakerNote ownership.
+- `safe/src/object/data.rs:413` This site mutates or traverses raw ExifData state, including thumbnail or MakerNote ownership.
+- `safe/src/object/data.rs:414` This site mutates or traverses raw ExifData state, including thumbnail or MakerNote ownership.
+- `safe/src/object/data.rs:418` This site mutates or traverses raw ExifData state, including thumbnail or MakerNote ownership.
+- `safe/src/object/data.rs:423` This site mutates or traverses raw ExifData state, including thumbnail or MakerNote ownership.
+- `safe/src/object/data.rs:428` This site mutates or traverses raw ExifData state, including thumbnail or MakerNote ownership.
+- `safe/src/object/data.rs:430` This site mutates or traverses raw ExifData state, including thumbnail or MakerNote ownership.
+- `safe/src/object/data.rs:431` This site mutates or traverses raw ExifData state, including thumbnail or MakerNote ownership.
+- `safe/src/object/data.rs:433` This site mutates or traverses raw ExifData state, including thumbnail or MakerNote ownership.
+- `safe/src/object/data.rs:435` This site mutates or traverses raw ExifData state, including thumbnail or MakerNote ownership.
+- `safe/src/object/data.rs:436` This site mutates or traverses raw ExifData state, including thumbnail or MakerNote ownership.
+- `safe/src/object/data.rs:440` This site mutates or traverses raw ExifData state, including thumbnail or MakerNote ownership.
+- `safe/src/object/data.rs:441` This site mutates or traverses raw ExifData state, including thumbnail or MakerNote ownership.
+- `safe/src/object/data.rs:442` This site mutates or traverses raw ExifData state, including thumbnail or MakerNote ownership.
+- `safe/src/object/data.rs:443` This site mutates or traverses raw ExifData state, including thumbnail or MakerNote ownership.
+- `safe/src/object/data.rs:444` This site mutates or traverses raw ExifData state, including thumbnail or MakerNote ownership.
+- `safe/src/object/data.rs:445` This site mutates or traverses raw ExifData state, including thumbnail or MakerNote ownership.
+- `safe/src/object/data.rs:452` This site mutates or traverses raw ExifData state, including thumbnail or MakerNote ownership.
+- `safe/src/object/data.rs:456` This site mutates or traverses raw ExifData state, including thumbnail or MakerNote ownership.
+- `safe/src/object/data.rs:457` This site mutates or traverses raw ExifData state, including thumbnail or MakerNote ownership.
+- `safe/src/object/data.rs:460` This site mutates or traverses raw ExifData state, including thumbnail or MakerNote ownership.
+- `safe/src/object/data.rs:466` This site mutates or traverses raw ExifData state, including thumbnail or MakerNote ownership.
+- `safe/src/object/data.rs:467` This site mutates or traverses raw ExifData state, including thumbnail or MakerNote ownership.
+- `safe/src/object/data.rs:472` This site mutates or traverses raw ExifData state, including thumbnail or MakerNote ownership.
+- `safe/src/object/data.rs:475` This site mutates or traverses raw ExifData state, including thumbnail or MakerNote ownership.
+- `safe/src/object/data.rs:479` This site mutates or traverses raw ExifData state, including thumbnail or MakerNote ownership.
+- `safe/src/object/data.rs:480` This site mutates or traverses raw ExifData state, including thumbnail or MakerNote ownership.
+- `safe/src/object/data.rs:481` This site mutates or traverses raw ExifData state, including thumbnail or MakerNote ownership.
+- `safe/src/object/data.rs:484` This site mutates or traverses raw ExifData state, including thumbnail or MakerNote ownership.
+- `safe/src/object/data.rs:495` This site mutates or traverses raw ExifData state, including thumbnail or MakerNote ownership.
+- `safe/src/object/data.rs:499` This site mutates or traverses raw ExifData state, including thumbnail or MakerNote ownership.
+- `safe/src/object/data.rs:500` This site mutates or traverses raw ExifData state, including thumbnail or MakerNote ownership.
+- `safe/src/object/data.rs:504` This site mutates or traverses raw ExifData state, including thumbnail or MakerNote ownership.
+- `safe/src/object/data.rs:508` This site mutates or traverses raw ExifData state, including thumbnail or MakerNote ownership.
+- `safe/src/object/data.rs:514` This site mutates or traverses raw ExifData state, including thumbnail or MakerNote ownership.
+- `safe/src/object/data.rs:515` This site mutates or traverses raw ExifData state, including thumbnail or MakerNote ownership.
+- `safe/src/object/data.rs:519` This site mutates or traverses raw ExifData state, including thumbnail or MakerNote ownership.
+- `safe/src/object/data.rs:520` This site mutates or traverses raw ExifData state, including thumbnail or MakerNote ownership.
+- `safe/src/object/data.rs:524` This site mutates or traverses raw ExifData state, including thumbnail or MakerNote ownership.
+- `safe/src/object/data.rs:525` This site mutates or traverses raw ExifData state, including thumbnail or MakerNote ownership.
+- `safe/src/object/data.rs:529` This site mutates or traverses raw ExifData state, including thumbnail or MakerNote ownership.
+- `safe/src/object/data.rs:530` This site mutates or traverses raw ExifData state, including thumbnail or MakerNote ownership.
+- `safe/src/object/data.rs:536` This site mutates or traverses raw ExifData state, including thumbnail or MakerNote ownership.
+- `safe/src/object/data.rs:537` This site mutates or traverses raw ExifData state, including thumbnail or MakerNote ownership.
+- `safe/src/object/data.rs:541` This site mutates or traverses raw ExifData state, including thumbnail or MakerNote ownership.
+- `safe/src/object/data.rs:542` This site mutates or traverses raw ExifData state, including thumbnail or MakerNote ownership.
+- `safe/src/object/data.rs:548` This site mutates or traverses raw ExifData state, including thumbnail or MakerNote ownership.
+- `safe/src/object/data.rs:549` This site mutates or traverses raw ExifData state, including thumbnail or MakerNote ownership.
+- `safe/src/object/data.rs:553` This site mutates or traverses raw ExifData state, including thumbnail or MakerNote ownership.
+- `safe/src/object/data.rs:558` This site mutates or traverses raw ExifData state, including thumbnail or MakerNote ownership.
+- `safe/src/object/data.rs:562` This site mutates or traverses raw ExifData state, including thumbnail or MakerNote ownership.
+- `safe/src/object/data.rs:563` This site mutates or traverses raw ExifData state, including thumbnail or MakerNote ownership.
+- `safe/src/object/data.rs:567` This site mutates or traverses raw ExifData state, including thumbnail or MakerNote ownership.
+- `safe/src/object/data.rs:568` This site mutates or traverses raw ExifData state, including thumbnail or MakerNote ownership.
+- `safe/src/object/data.rs:572` This site mutates or traverses raw ExifData state, including thumbnail or MakerNote ownership.
+- `safe/src/object/data.rs:573` This site mutates or traverses raw ExifData state, including thumbnail or MakerNote ownership.
+- `safe/src/object/data.rs:577` This site mutates or traverses raw ExifData state, including thumbnail or MakerNote ownership.
+- `safe/src/object/data.rs:578` This site mutates or traverses raw ExifData state, including thumbnail or MakerNote ownership.
+- `safe/src/object/data.rs:584` This site mutates or traverses raw ExifData state, including thumbnail or MakerNote ownership.
+- `safe/src/object/data.rs:585` This site mutates or traverses raw ExifData state, including thumbnail or MakerNote ownership.
+- `safe/src/object/data.rs:589` This site mutates or traverses raw ExifData state, including thumbnail or MakerNote ownership.
+- `safe/src/object/data.rs:590` This site mutates or traverses raw ExifData state, including thumbnail or MakerNote ownership.
+- `safe/src/object/data.rs:594` This site mutates or traverses raw ExifData state, including thumbnail or MakerNote ownership.
+- `safe/src/object/data.rs:595` This site mutates or traverses raw ExifData state, including thumbnail or MakerNote ownership.
+
+#### safe/src/object/entry.rs
+- `safe/src/object/entry.rs:131` This site reads or mutates raw ExifEntry storage, buffer contents, or libc time state.
+- `safe/src/object/entry.rs:508` This site reads or mutates raw ExifEntry storage, buffer contents, or libc time state.
+- `safe/src/object/entry.rs:509` This site reads or mutates raw ExifEntry storage, buffer contents, or libc time state.
+- `safe/src/object/entry.rs:513` This site reads or mutates raw ExifEntry storage, buffer contents, or libc time state.
+- `safe/src/object/entry.rs:514` This site reads or mutates raw ExifEntry storage, buffer contents, or libc time state.
+- `safe/src/object/entry.rs:517` This site reads or mutates raw ExifEntry storage, buffer contents, or libc time state.
+- `safe/src/object/entry.rs:522` This site reads or mutates raw ExifEntry storage, buffer contents, or libc time state.
+- `safe/src/object/entry.rs:528` This site reads or mutates raw ExifEntry storage, buffer contents, or libc time state.
+- `safe/src/object/entry.rs:529` This site reads or mutates raw ExifEntry storage, buffer contents, or libc time state.
+- `safe/src/object/entry.rs:533` This site reads or mutates raw ExifEntry storage, buffer contents, or libc time state.
+- `safe/src/object/entry.rs:535` This site reads or mutates raw ExifEntry storage, buffer contents, or libc time state.
+- `safe/src/object/entry.rs:540` This site reads or mutates raw ExifEntry storage, buffer contents, or libc time state.
+- `safe/src/object/entry.rs:541` This site reads or mutates raw ExifEntry storage, buffer contents, or libc time state.
+- `safe/src/object/entry.rs:545` This site reads or mutates raw ExifEntry storage, buffer contents, or libc time state.
+- `safe/src/object/entry.rs:548` This site reads or mutates raw ExifEntry storage, buffer contents, or libc time state.
+- `safe/src/object/entry.rs:551` This site reads or mutates raw ExifEntry storage, buffer contents, or libc time state.
+- `safe/src/object/entry.rs:557` This site reads or mutates raw ExifEntry storage, buffer contents, or libc time state.
+- `safe/src/object/entry.rs:561` This site reads or mutates raw ExifEntry storage, buffer contents, or libc time state.
+- `safe/src/object/entry.rs:565` This site reads or mutates raw ExifEntry storage, buffer contents, or libc time state.
+- `safe/src/object/entry.rs:568` This site reads or mutates raw ExifEntry storage, buffer contents, or libc time state.
+- `safe/src/object/entry.rs:571` This site reads or mutates raw ExifEntry storage, buffer contents, or libc time state.
+- `safe/src/object/entry.rs:582` This site reads or mutates raw ExifEntry storage, buffer contents, or libc time state.
+- `safe/src/object/entry.rs:583` This site reads or mutates raw ExifEntry storage, buffer contents, or libc time state.
+- `safe/src/object/entry.rs:584` This site reads or mutates raw ExifEntry storage, buffer contents, or libc time state.
+- `safe/src/object/entry.rs:585` This site reads or mutates raw ExifEntry storage, buffer contents, or libc time state.
+- `safe/src/object/entry.rs:589` This site reads or mutates raw ExifEntry storage, buffer contents, or libc time state.
+- `safe/src/object/entry.rs:590` This site reads or mutates raw ExifEntry storage, buffer contents, or libc time state.
+- `safe/src/object/entry.rs:594` This site reads or mutates raw ExifEntry storage, buffer contents, or libc time state.
+- `safe/src/object/entry.rs:598` This site reads or mutates raw ExifEntry storage, buffer contents, or libc time state.
+- `safe/src/object/entry.rs:599` This site reads or mutates raw ExifEntry storage, buffer contents, or libc time state.
+- `safe/src/object/entry.rs:603` This site reads or mutates raw ExifEntry storage, buffer contents, or libc time state.
+- `safe/src/object/entry.rs:606` This site reads or mutates raw ExifEntry storage, buffer contents, or libc time state.
+- `safe/src/object/entry.rs:610` This site reads or mutates raw ExifEntry storage, buffer contents, or libc time state.
+- `safe/src/object/entry.rs:611` This site reads or mutates raw ExifEntry storage, buffer contents, or libc time state.
+- `safe/src/object/entry.rs:615` This site reads or mutates raw ExifEntry storage, buffer contents, or libc time state.
+- `safe/src/object/entry.rs:616` This site reads or mutates raw ExifEntry storage, buffer contents, or libc time state.
+- `safe/src/object/entry.rs:617` This site reads or mutates raw ExifEntry storage, buffer contents, or libc time state.
+- `safe/src/object/entry.rs:619` This site reads or mutates raw ExifEntry storage, buffer contents, or libc time state.
+- `safe/src/object/entry.rs:632` This site reads or mutates raw ExifEntry storage, buffer contents, or libc time state.
+- `safe/src/object/entry.rs:635` This site reads or mutates raw ExifEntry storage, buffer contents, or libc time state.
+- `safe/src/object/entry.rs:638` This site reads or mutates raw ExifEntry storage, buffer contents, or libc time state.
+- `safe/src/object/entry.rs:641` This site reads or mutates raw ExifEntry storage, buffer contents, or libc time state.
+- `safe/src/object/entry.rs:648` This site reads or mutates raw ExifEntry storage, buffer contents, or libc time state.
+- `safe/src/object/entry.rs:655` This site reads or mutates raw ExifEntry storage, buffer contents, or libc time state.
+- `safe/src/object/entry.rs:656` This site reads or mutates raw ExifEntry storage, buffer contents, or libc time state.
+- `safe/src/object/entry.rs:660` This site reads or mutates raw ExifEntry storage, buffer contents, or libc time state.
+- `safe/src/object/entry.rs:677` This site reads or mutates raw ExifEntry storage, buffer contents, or libc time state.
+- `safe/src/object/entry.rs:680` This site reads or mutates raw ExifEntry storage, buffer contents, or libc time state.
+- `safe/src/object/entry.rs:681` This site reads or mutates raw ExifEntry storage, buffer contents, or libc time state.
+- `safe/src/object/entry.rs:685` This site reads or mutates raw ExifEntry storage, buffer contents, or libc time state.
+- `safe/src/object/entry.rs:686` This site reads or mutates raw ExifEntry storage, buffer contents, or libc time state.
+- `safe/src/object/entry.rs:688` This site reads or mutates raw ExifEntry storage, buffer contents, or libc time state.
+- `safe/src/object/entry.rs:692` This site reads or mutates raw ExifEntry storage, buffer contents, or libc time state.
+- `safe/src/object/entry.rs:693` This site reads or mutates raw ExifEntry storage, buffer contents, or libc time state.
+- `safe/src/object/entry.rs:698` This site reads or mutates raw ExifEntry storage, buffer contents, or libc time state.
+- `safe/src/object/entry.rs:707` This site reads or mutates raw ExifEntry storage, buffer contents, or libc time state.
+- `safe/src/object/entry.rs:720` This site reads or mutates raw ExifEntry storage, buffer contents, or libc time state.
+- `safe/src/object/entry.rs:721` This site reads or mutates raw ExifEntry storage, buffer contents, or libc time state.
+- `safe/src/object/entry.rs:722` This site reads or mutates raw ExifEntry storage, buffer contents, or libc time state.
+- `safe/src/object/entry.rs:724` This site reads or mutates raw ExifEntry storage, buffer contents, or libc time state.
+- `safe/src/object/entry.rs:725` This site reads or mutates raw ExifEntry storage, buffer contents, or libc time state.
+- `safe/src/object/entry.rs:726` This site reads or mutates raw ExifEntry storage, buffer contents, or libc time state.
+- `safe/src/object/entry.rs:742` This site reads or mutates raw ExifEntry storage, buffer contents, or libc time state.
+- `safe/src/object/entry.rs:752` This site reads or mutates raw ExifEntry storage, buffer contents, or libc time state.
+- `safe/src/object/entry.rs:758` This site reads or mutates raw ExifEntry storage, buffer contents, or libc time state.
+- `safe/src/object/entry.rs:759` This site reads or mutates raw ExifEntry storage, buffer contents, or libc time state.
+- `safe/src/object/entry.rs:760` This site reads or mutates raw ExifEntry storage, buffer contents, or libc time state.
+- `safe/src/object/entry.rs:762` This site reads or mutates raw ExifEntry storage, buffer contents, or libc time state.
+- `safe/src/object/entry.rs:763` This site reads or mutates raw ExifEntry storage, buffer contents, or libc time state.
+- `safe/src/object/entry.rs:764` This site reads or mutates raw ExifEntry storage, buffer contents, or libc time state.
+- `safe/src/object/entry.rs:780` This site reads or mutates raw ExifEntry storage, buffer contents, or libc time state.
+- `safe/src/object/entry.rs:790` This site reads or mutates raw ExifEntry storage, buffer contents, or libc time state.
+- `safe/src/object/entry.rs:796` This site reads or mutates raw ExifEntry storage, buffer contents, or libc time state.
+- `safe/src/object/entry.rs:797` This site reads or mutates raw ExifEntry storage, buffer contents, or libc time state.
+- `safe/src/object/entry.rs:802` This site reads or mutates raw ExifEntry storage, buffer contents, or libc time state.
+- `safe/src/object/entry.rs:803` This site reads or mutates raw ExifEntry storage, buffer contents, or libc time state.
+- `safe/src/object/entry.rs:804` This site reads or mutates raw ExifEntry storage, buffer contents, or libc time state.
+- `safe/src/object/entry.rs:806` This site reads or mutates raw ExifEntry storage, buffer contents, or libc time state.
+- `safe/src/object/entry.rs:811` This site reads or mutates raw ExifEntry storage, buffer contents, or libc time state.
+- `safe/src/object/entry.rs:812` This site reads or mutates raw ExifEntry storage, buffer contents, or libc time state.
+- `safe/src/object/entry.rs:813` This site reads or mutates raw ExifEntry storage, buffer contents, or libc time state.
+- `safe/src/object/entry.rs:814` This site reads or mutates raw ExifEntry storage, buffer contents, or libc time state.
+- `safe/src/object/entry.rs:815` This site reads or mutates raw ExifEntry storage, buffer contents, or libc time state.
+- `safe/src/object/entry.rs:816` This site reads or mutates raw ExifEntry storage, buffer contents, or libc time state.
+- `safe/src/object/entry.rs:820` This site reads or mutates raw ExifEntry storage, buffer contents, or libc time state.
+- `safe/src/object/entry.rs:829` This site reads or mutates raw ExifEntry storage, buffer contents, or libc time state.
+- `safe/src/object/entry.rs:830` This site reads or mutates raw ExifEntry storage, buffer contents, or libc time state.
+- `safe/src/object/entry.rs:841` This site reads or mutates raw ExifEntry storage, buffer contents, or libc time state.
+- `safe/src/object/entry.rs:853` This site reads or mutates raw ExifEntry storage, buffer contents, or libc time state.
+- `safe/src/object/entry.rs:854` This site reads or mutates raw ExifEntry storage, buffer contents, or libc time state.
+- `safe/src/object/entry.rs:855` This site reads or mutates raw ExifEntry storage, buffer contents, or libc time state.
+- `safe/src/object/entry.rs:856` This site reads or mutates raw ExifEntry storage, buffer contents, or libc time state.
+- `safe/src/object/entry.rs:857` This site reads or mutates raw ExifEntry storage, buffer contents, or libc time state.
+- `safe/src/object/entry.rs:861` This site reads or mutates raw ExifEntry storage, buffer contents, or libc time state.
+- `safe/src/object/entry.rs:876` This site reads or mutates raw ExifEntry storage, buffer contents, or libc time state.
+- `safe/src/object/entry.rs:878` This site reads or mutates raw ExifEntry storage, buffer contents, or libc time state.
+- `safe/src/object/entry.rs:882` This site reads or mutates raw ExifEntry storage, buffer contents, or libc time state.
+- `safe/src/object/entry.rs:895` This site reads or mutates raw ExifEntry storage, buffer contents, or libc time state.
+- `safe/src/object/entry.rs:905` This site reads or mutates raw ExifEntry storage, buffer contents, or libc time state.
+- `safe/src/object/entry.rs:907` This site reads or mutates raw ExifEntry storage, buffer contents, or libc time state.
+- `safe/src/object/entry.rs:916` This site reads or mutates raw ExifEntry storage, buffer contents, or libc time state.
+- `safe/src/object/entry.rs:946` This site reads or mutates raw ExifEntry storage, buffer contents, or libc time state.
+- `safe/src/object/entry.rs:948` This site reads or mutates raw ExifEntry storage, buffer contents, or libc time state.
+- `safe/src/object/entry.rs:949` This site reads or mutates raw ExifEntry storage, buffer contents, or libc time state.
+- `safe/src/object/entry.rs:950` This site reads or mutates raw ExifEntry storage, buffer contents, or libc time state.
+- `safe/src/object/entry.rs:955` This site reads or mutates raw ExifEntry storage, buffer contents, or libc time state.
+- `safe/src/object/entry.rs:956` This site reads or mutates raw ExifEntry storage, buffer contents, or libc time state.
+- `safe/src/object/entry.rs:960` This site reads or mutates raw ExifEntry storage, buffer contents, or libc time state.
+- `safe/src/object/entry.rs:961` This site reads or mutates raw ExifEntry storage, buffer contents, or libc time state.
+- `safe/src/object/entry.rs:1012` This site reads or mutates raw ExifEntry storage, buffer contents, or libc time state.
+- `safe/src/object/entry.rs:1021` This site reads or mutates raw ExifEntry storage, buffer contents, or libc time state.
+- `safe/src/object/entry.rs:1028` This site reads or mutates raw ExifEntry storage, buffer contents, or libc time state.
+- `safe/src/object/entry.rs:1035` This site reads or mutates raw ExifEntry storage, buffer contents, or libc time state.
+- `safe/src/object/entry.rs:1042` This site reads or mutates raw ExifEntry storage, buffer contents, or libc time state.
+- `safe/src/object/entry.rs:1050` This site reads or mutates raw ExifEntry storage, buffer contents, or libc time state.
+- `safe/src/object/entry.rs:1066` This site reads or mutates raw ExifEntry storage, buffer contents, or libc time state.
+- `safe/src/object/entry.rs:1104` This site reads or mutates raw ExifEntry storage, buffer contents, or libc time state.
+- `safe/src/object/entry.rs:1127` This site reads or mutates raw ExifEntry storage, buffer contents, or libc time state.
+- `safe/src/object/entry.rs:1142` This site reads or mutates raw ExifEntry storage, buffer contents, or libc time state.
+- `safe/src/object/entry.rs:1148` This site reads or mutates raw ExifEntry storage, buffer contents, or libc time state.
+- `safe/src/object/entry.rs:1153` This site reads or mutates raw ExifEntry storage, buffer contents, or libc time state.
+- `safe/src/object/entry.rs:1163` This site reads or mutates raw ExifEntry storage, buffer contents, or libc time state.
+- `safe/src/object/entry.rs:1175` This site reads or mutates raw ExifEntry storage, buffer contents, or libc time state.
+- `safe/src/object/entry.rs:1181` This site reads or mutates raw ExifEntry storage, buffer contents, or libc time state.
+- `safe/src/object/entry.rs:1185` This site reads or mutates raw ExifEntry storage, buffer contents, or libc time state.
+- `safe/src/object/entry.rs:1190` This site reads or mutates raw ExifEntry storage, buffer contents, or libc time state.
+- `safe/src/object/entry.rs:1196` This site reads or mutates raw ExifEntry storage, buffer contents, or libc time state.
+- `safe/src/object/entry.rs:1200` This site reads or mutates raw ExifEntry storage, buffer contents, or libc time state.
+- `safe/src/object/entry.rs:1210` This site reads or mutates raw ExifEntry storage, buffer contents, or libc time state.
+- `safe/src/object/entry.rs:1217` This site reads or mutates raw ExifEntry storage, buffer contents, or libc time state.
+- `safe/src/object/entry.rs:1224` This site reads or mutates raw ExifEntry storage, buffer contents, or libc time state.
+- `safe/src/object/entry.rs:1231` This site reads or mutates raw ExifEntry storage, buffer contents, or libc time state.
+- `safe/src/object/entry.rs:1238` This site reads or mutates raw ExifEntry storage, buffer contents, or libc time state.
+- `safe/src/object/entry.rs:1245` This site reads or mutates raw ExifEntry storage, buffer contents, or libc time state.
+- `safe/src/object/entry.rs:1267` This site reads or mutates raw ExifEntry storage, buffer contents, or libc time state.
+- `safe/src/object/entry.rs:1329` This site reads or mutates raw ExifEntry storage, buffer contents, or libc time state.
+- `safe/src/object/entry.rs:1330` This site reads or mutates raw ExifEntry storage, buffer contents, or libc time state.
+- `safe/src/object/entry.rs:1331` This site reads or mutates raw ExifEntry storage, buffer contents, or libc time state.
+- `safe/src/object/entry.rs:1348` This site reads or mutates raw ExifEntry storage, buffer contents, or libc time state.
+- `safe/src/object/entry.rs:1367` This site reads or mutates raw ExifEntry storage, buffer contents, or libc time state.
+- `safe/src/object/entry.rs:1386` This site reads or mutates raw ExifEntry storage, buffer contents, or libc time state.
+- `safe/src/object/entry.rs:1405` This site reads or mutates raw ExifEntry storage, buffer contents, or libc time state.
+- `safe/src/object/entry.rs:1425` This site reads or mutates raw ExifEntry storage, buffer contents, or libc time state.
+- `safe/src/object/entry.rs:1451` This site reads or mutates raw ExifEntry storage, buffer contents, or libc time state.
+- `safe/src/object/entry.rs:1471` This site reads or mutates raw ExifEntry storage, buffer contents, or libc time state.
+- `safe/src/object/entry.rs:1533` This site reads or mutates raw ExifEntry storage, buffer contents, or libc time state.
+- `safe/src/object/entry.rs:1534` This site reads or mutates raw ExifEntry storage, buffer contents, or libc time state.
+- `safe/src/object/entry.rs:1540` This site reads or mutates raw ExifEntry storage, buffer contents, or libc time state.
+- `safe/src/object/entry.rs:1646` This site reads or mutates raw ExifEntry storage, buffer contents, or libc time state.
+- `safe/src/object/entry.rs:1649` This site reads or mutates raw ExifEntry storage, buffer contents, or libc time state.
+- `safe/src/object/entry.rs:1650` This site reads or mutates raw ExifEntry storage, buffer contents, or libc time state.
+- `safe/src/object/entry.rs:1658` This site reads or mutates raw ExifEntry storage, buffer contents, or libc time state.
+- `safe/src/object/entry.rs:1659` This site reads or mutates raw ExifEntry storage, buffer contents, or libc time state.
+- `safe/src/object/entry.rs:1667` This site reads or mutates raw ExifEntry storage, buffer contents, or libc time state.
+- `safe/src/object/entry.rs:1674` This site reads or mutates raw ExifEntry storage, buffer contents, or libc time state.
+- `safe/src/object/entry.rs:1675` This site reads or mutates raw ExifEntry storage, buffer contents, or libc time state.
+- `safe/src/object/entry.rs:1679` This site reads or mutates raw ExifEntry storage, buffer contents, or libc time state.
+- `safe/src/object/entry.rs:1689` This site reads or mutates raw ExifEntry storage, buffer contents, or libc time state.
+- `safe/src/object/entry.rs:1690` This site reads or mutates raw ExifEntry storage, buffer contents, or libc time state.
+- `safe/src/object/entry.rs:1694` This site reads or mutates raw ExifEntry storage, buffer contents, or libc time state.
+- `safe/src/object/entry.rs:1705` This site reads or mutates raw ExifEntry storage, buffer contents, or libc time state.
+- `safe/src/object/entry.rs:1706` This site reads or mutates raw ExifEntry storage, buffer contents, or libc time state.
+- `safe/src/object/entry.rs:1710` This site reads or mutates raw ExifEntry storage, buffer contents, or libc time state.
+- `safe/src/object/entry.rs:1718` This site reads or mutates raw ExifEntry storage, buffer contents, or libc time state.
+- `safe/src/object/entry.rs:1720` This site reads or mutates raw ExifEntry storage, buffer contents, or libc time state.
+- `safe/src/object/entry.rs:1729` This site reads or mutates raw ExifEntry storage, buffer contents, or libc time state.
+- `safe/src/object/entry.rs:1754` This site reads or mutates raw ExifEntry storage, buffer contents, or libc time state.
+- `safe/src/object/entry.rs:1755` This site reads or mutates raw ExifEntry storage, buffer contents, or libc time state.
+- `safe/src/object/entry.rs:1759` This site reads or mutates raw ExifEntry storage, buffer contents, or libc time state.
+- `safe/src/object/entry.rs:1769` This site reads or mutates raw ExifEntry storage, buffer contents, or libc time state.
+- `safe/src/object/entry.rs:1770` This site reads or mutates raw ExifEntry storage, buffer contents, or libc time state.
+- `safe/src/object/entry.rs:1774` This site reads or mutates raw ExifEntry storage, buffer contents, or libc time state.
+- `safe/src/object/entry.rs:1788` This site reads or mutates raw ExifEntry storage, buffer contents, or libc time state.
+- `safe/src/object/entry.rs:1789` This site reads or mutates raw ExifEntry storage, buffer contents, or libc time state.
+- `safe/src/object/entry.rs:1793` This site reads or mutates raw ExifEntry storage, buffer contents, or libc time state.
+- `safe/src/object/entry.rs:1808` This site reads or mutates raw ExifEntry storage, buffer contents, or libc time state.
+- `safe/src/object/entry.rs:1809` This site reads or mutates raw ExifEntry storage, buffer contents, or libc time state.
+- `safe/src/object/entry.rs:1813` This site reads or mutates raw ExifEntry storage, buffer contents, or libc time state.
+- `safe/src/object/entry.rs:1824` This site reads or mutates raw ExifEntry storage, buffer contents, or libc time state.
+- `safe/src/object/entry.rs:1825` This site reads or mutates raw ExifEntry storage, buffer contents, or libc time state.
+- `safe/src/object/entry.rs:1835` This site reads or mutates raw ExifEntry storage, buffer contents, or libc time state.
+- `safe/src/object/entry.rs:1836` This site reads or mutates raw ExifEntry storage, buffer contents, or libc time state.
+- `safe/src/object/entry.rs:1859` This site reads or mutates raw ExifEntry storage, buffer contents, or libc time state.
+- `safe/src/object/entry.rs:1860` This site reads or mutates raw ExifEntry storage, buffer contents, or libc time state.
+- `safe/src/object/entry.rs:1864` This site reads or mutates raw ExifEntry storage, buffer contents, or libc time state.
+- `safe/src/object/entry.rs:1877` This site reads or mutates raw ExifEntry storage, buffer contents, or libc time state.
+- `safe/src/object/entry.rs:1878` This site reads or mutates raw ExifEntry storage, buffer contents, or libc time state.
+- `safe/src/object/entry.rs:1888` This site reads or mutates raw ExifEntry storage, buffer contents, or libc time state.
+- `safe/src/object/entry.rs:1889` This site reads or mutates raw ExifEntry storage, buffer contents, or libc time state.
+- `safe/src/object/entry.rs:1893` This site reads or mutates raw ExifEntry storage, buffer contents, or libc time state.
+- `safe/src/object/entry.rs:1896` This site reads or mutates raw ExifEntry storage, buffer contents, or libc time state.
+- `safe/src/object/entry.rs:1912` This site reads or mutates raw ExifEntry storage, buffer contents, or libc time state.
+- `safe/src/object/entry.rs:1915` This site reads or mutates raw ExifEntry storage, buffer contents, or libc time state.
+- `safe/src/object/entry.rs:1917` This site reads or mutates raw ExifEntry storage, buffer contents, or libc time state.
+- `safe/src/object/entry.rs:1920` This site reads or mutates raw ExifEntry storage, buffer contents, or libc time state.
+- `safe/src/object/entry.rs:1929` This site reads or mutates raw ExifEntry storage, buffer contents, or libc time state.
+- `safe/src/object/entry.rs:1932` This site reads or mutates raw ExifEntry storage, buffer contents, or libc time state.
+- `safe/src/object/entry.rs:1938` This site reads or mutates raw ExifEntry storage, buffer contents, or libc time state.
+- `safe/src/object/entry.rs:1947` This site reads or mutates raw ExifEntry storage, buffer contents, or libc time state.
+- `safe/src/object/entry.rs:1950` This site reads or mutates raw ExifEntry storage, buffer contents, or libc time state.
+- `safe/src/object/entry.rs:1956` This site reads or mutates raw ExifEntry storage, buffer contents, or libc time state.
+- `safe/src/object/entry.rs:1962` This site reads or mutates raw ExifEntry storage, buffer contents, or libc time state.
+- `safe/src/object/entry.rs:1976` This site reads or mutates raw ExifEntry storage, buffer contents, or libc time state.
+- `safe/src/object/entry.rs:1983` This site reads or mutates raw ExifEntry storage, buffer contents, or libc time state.
+- `safe/src/object/entry.rs:1994` This site reads or mutates raw ExifEntry storage, buffer contents, or libc time state.
+- `safe/src/object/entry.rs:2001` This site reads or mutates raw ExifEntry storage, buffer contents, or libc time state.
+- `safe/src/object/entry.rs:2012` This site reads or mutates raw ExifEntry storage, buffer contents, or libc time state.
+- `safe/src/object/entry.rs:2013` This site reads or mutates raw ExifEntry storage, buffer contents, or libc time state.
+- `safe/src/object/entry.rs:2017` This site reads or mutates raw ExifEntry storage, buffer contents, or libc time state.
+- `safe/src/object/entry.rs:2020` This site reads or mutates raw ExifEntry storage, buffer contents, or libc time state.
+- `safe/src/object/entry.rs:2026` This site reads or mutates raw ExifEntry storage, buffer contents, or libc time state.
+- `safe/src/object/entry.rs:2052` This site reads or mutates raw ExifEntry storage, buffer contents, or libc time state.
+- `safe/src/object/entry.rs:2053` This site reads or mutates raw ExifEntry storage, buffer contents, or libc time state.
+- `safe/src/object/entry.rs:2057` This site reads or mutates raw ExifEntry storage, buffer contents, or libc time state.
+- `safe/src/object/entry.rs:2060` This site reads or mutates raw ExifEntry storage, buffer contents, or libc time state.
+- `safe/src/object/entry.rs:2076` This site reads or mutates raw ExifEntry storage, buffer contents, or libc time state.
+- `safe/src/object/entry.rs:2077` This site reads or mutates raw ExifEntry storage, buffer contents, or libc time state.
+- `safe/src/object/entry.rs:2081` This site reads or mutates raw ExifEntry storage, buffer contents, or libc time state.
+- `safe/src/object/entry.rs:2084` This site reads or mutates raw ExifEntry storage, buffer contents, or libc time state.
+- `safe/src/object/entry.rs:2099` This site reads or mutates raw ExifEntry storage, buffer contents, or libc time state.
+- `safe/src/object/entry.rs:2101` This site reads or mutates raw ExifEntry storage, buffer contents, or libc time state.
+- `safe/src/object/entry.rs:2102` This site reads or mutates raw ExifEntry storage, buffer contents, or libc time state.
+- `safe/src/object/entry.rs:2107` This site reads or mutates raw ExifEntry storage, buffer contents, or libc time state.
+- `safe/src/object/entry.rs:2108` This site reads or mutates raw ExifEntry storage, buffer contents, or libc time state.
+- `safe/src/object/entry.rs:2113` This site reads or mutates raw ExifEntry storage, buffer contents, or libc time state.
+- `safe/src/object/entry.rs:2114` This site reads or mutates raw ExifEntry storage, buffer contents, or libc time state.
+- `safe/src/object/entry.rs:2122` This site reads or mutates raw ExifEntry storage, buffer contents, or libc time state.
+- `safe/src/object/entry.rs:2123` This site reads or mutates raw ExifEntry storage, buffer contents, or libc time state.
+- `safe/src/object/entry.rs:2131` This site reads or mutates raw ExifEntry storage, buffer contents, or libc time state.
+- `safe/src/object/entry.rs:2132` This site reads or mutates raw ExifEntry storage, buffer contents, or libc time state.
+- `safe/src/object/entry.rs:2141` This site reads or mutates raw ExifEntry storage, buffer contents, or libc time state.
+- `safe/src/object/entry.rs:2142` This site reads or mutates raw ExifEntry storage, buffer contents, or libc time state.
+- `safe/src/object/entry.rs:2144` This site reads or mutates raw ExifEntry storage, buffer contents, or libc time state.
+- `safe/src/object/entry.rs:2147` This site reads or mutates raw ExifEntry storage, buffer contents, or libc time state.
+- `safe/src/object/entry.rs:2172` This site reads or mutates raw ExifEntry storage, buffer contents, or libc time state.
+- `safe/src/object/entry.rs:2173` This site reads or mutates raw ExifEntry storage, buffer contents, or libc time state.
+- `safe/src/object/entry.rs:2175` This site reads or mutates raw ExifEntry storage, buffer contents, or libc time state.
+- `safe/src/object/entry.rs:2178` This site reads or mutates raw ExifEntry storage, buffer contents, or libc time state.
+- `safe/src/object/entry.rs:2193` This site reads or mutates raw ExifEntry storage, buffer contents, or libc time state.
+- `safe/src/object/entry.rs:2194` This site reads or mutates raw ExifEntry storage, buffer contents, or libc time state.
+- `safe/src/object/entry.rs:2196` This site reads or mutates raw ExifEntry storage, buffer contents, or libc time state.
+- `safe/src/object/entry.rs:2199` This site reads or mutates raw ExifEntry storage, buffer contents, or libc time state.
+- `safe/src/object/entry.rs:2205` This site reads or mutates raw ExifEntry storage, buffer contents, or libc time state.
+- `safe/src/object/entry.rs:2212` This site reads or mutates raw ExifEntry storage, buffer contents, or libc time state.
+- `safe/src/object/entry.rs:2218` This site reads or mutates raw ExifEntry storage, buffer contents, or libc time state.
+- `safe/src/object/entry.rs:2224` This site reads or mutates raw ExifEntry storage, buffer contents, or libc time state.
+- `safe/src/object/entry.rs:2225` This site reads or mutates raw ExifEntry storage, buffer contents, or libc time state.
+- `safe/src/object/entry.rs:2232` This site reads or mutates raw ExifEntry storage, buffer contents, or libc time state.
+- `safe/src/object/entry.rs:2236` This site reads or mutates raw ExifEntry storage, buffer contents, or libc time state.
+- `safe/src/object/entry.rs:2237` This site reads or mutates raw ExifEntry storage, buffer contents, or libc time state.
+- `safe/src/object/entry.rs:2238` This site reads or mutates raw ExifEntry storage, buffer contents, or libc time state.
+- `safe/src/object/entry.rs:2241` This site reads or mutates raw ExifEntry storage, buffer contents, or libc time state.
+- `safe/src/object/entry.rs:2242` This site reads or mutates raw ExifEntry storage, buffer contents, or libc time state.
+- `safe/src/object/entry.rs:2243` This site reads or mutates raw ExifEntry storage, buffer contents, or libc time state.
+- `safe/src/object/entry.rs:2245` This site reads or mutates raw ExifEntry storage, buffer contents, or libc time state.
+- `safe/src/object/entry.rs:2249` This site reads or mutates raw ExifEntry storage, buffer contents, or libc time state.
+- `safe/src/object/entry.rs:2251` This site reads or mutates raw ExifEntry storage, buffer contents, or libc time state.
+- `safe/src/object/entry.rs:2255` This site reads or mutates raw ExifEntry storage, buffer contents, or libc time state.
+- `safe/src/object/entry.rs:2259` This site reads or mutates raw ExifEntry storage, buffer contents, or libc time state.
+- `safe/src/object/entry.rs:2266` This site reads or mutates raw ExifEntry storage, buffer contents, or libc time state.
+- `safe/src/object/entry.rs:2269` This site reads or mutates raw ExifEntry storage, buffer contents, or libc time state.
+- `safe/src/object/entry.rs:2274` This site reads or mutates raw ExifEntry storage, buffer contents, or libc time state.
+- `safe/src/object/entry.rs:2279` This site reads or mutates raw ExifEntry storage, buffer contents, or libc time state.
+- `safe/src/object/entry.rs:2284` This site reads or mutates raw ExifEntry storage, buffer contents, or libc time state.
+- `safe/src/object/entry.rs:2288` This site reads or mutates raw ExifEntry storage, buffer contents, or libc time state.
+- `safe/src/object/entry.rs:2295` This site reads or mutates raw ExifEntry storage, buffer contents, or libc time state.
+- `safe/src/object/entry.rs:2300` This site reads or mutates raw ExifEntry storage, buffer contents, or libc time state.
+- `safe/src/object/entry.rs:2303` This site reads or mutates raw ExifEntry storage, buffer contents, or libc time state.
+- `safe/src/object/entry.rs:2306` This site reads or mutates raw ExifEntry storage, buffer contents, or libc time state.
+- `safe/src/object/entry.rs:2312` This site reads or mutates raw ExifEntry storage, buffer contents, or libc time state.
+- `safe/src/object/entry.rs:2316` This site reads or mutates raw ExifEntry storage, buffer contents, or libc time state.
+- `safe/src/object/entry.rs:2317` This site reads or mutates raw ExifEntry storage, buffer contents, or libc time state.
+- `safe/src/object/entry.rs:2321` This site reads or mutates raw ExifEntry storage, buffer contents, or libc time state.
+- `safe/src/object/entry.rs:2322` This site reads or mutates raw ExifEntry storage, buffer contents, or libc time state.
+- `safe/src/object/entry.rs:2326` This site reads or mutates raw ExifEntry storage, buffer contents, or libc time state.
+- `safe/src/object/entry.rs:2327` This site reads or mutates raw ExifEntry storage, buffer contents, or libc time state.
+- `safe/src/object/entry.rs:2331` This site reads or mutates raw ExifEntry storage, buffer contents, or libc time state.
+- `safe/src/object/entry.rs:2332` This site reads or mutates raw ExifEntry storage, buffer contents, or libc time state.
+- `safe/src/object/entry.rs:2336` This site reads or mutates raw ExifEntry storage, buffer contents, or libc time state.
+- `safe/src/object/entry.rs:2337` This site reads or mutates raw ExifEntry storage, buffer contents, or libc time state.
+- `safe/src/object/entry.rs:2341` This site reads or mutates raw ExifEntry storage, buffer contents, or libc time state.
+- `safe/src/object/entry.rs:2342` This site reads or mutates raw ExifEntry storage, buffer contents, or libc time state.
+- `safe/src/object/entry.rs:2346` This site reads or mutates raw ExifEntry storage, buffer contents, or libc time state.
+- `safe/src/object/entry.rs:2351` This site reads or mutates raw ExifEntry storage, buffer contents, or libc time state.
+- `safe/src/object/entry.rs:2357` This site reads or mutates raw ExifEntry storage, buffer contents, or libc time state.
+- `safe/src/object/entry.rs:2358` This site reads or mutates raw ExifEntry storage, buffer contents, or libc time state.
+
+#### safe/src/parser/data_load.rs
+- `safe/src/parser/data_load.rs:180` This site parses caller-controlled EXIF or JPEG bytes through raw pointer or slice bridging.
+- `safe/src/parser/data_load.rs:188` This site parses caller-controlled EXIF or JPEG bytes through raw pointer or slice bridging.
+- `safe/src/parser/data_load.rs:197` This site parses caller-controlled EXIF or JPEG bytes through raw pointer or slice bridging.
+- `safe/src/parser/data_load.rs:236` This site parses caller-controlled EXIF or JPEG bytes through raw pointer or slice bridging.
+- `safe/src/parser/data_load.rs:243` This site parses caller-controlled EXIF or JPEG bytes through raw pointer or slice bridging.
+- `safe/src/parser/data_load.rs:248` This site parses caller-controlled EXIF or JPEG bytes through raw pointer or slice bridging.
+- `safe/src/parser/data_load.rs:254` This site parses caller-controlled EXIF or JPEG bytes through raw pointer or slice bridging.
+- `safe/src/parser/data_load.rs:301` This site parses caller-controlled EXIF or JPEG bytes through raw pointer or slice bridging.
+- `safe/src/parser/data_load.rs:302` This site parses caller-controlled EXIF or JPEG bytes through raw pointer or slice bridging.
+- `safe/src/parser/data_load.rs:306` This site parses caller-controlled EXIF or JPEG bytes through raw pointer or slice bridging.
+- `safe/src/parser/data_load.rs:370` This site parses caller-controlled EXIF or JPEG bytes through raw pointer or slice bridging.
+- `safe/src/parser/data_load.rs:404` This site parses caller-controlled EXIF or JPEG bytes through raw pointer or slice bridging.
+- `safe/src/parser/data_load.rs:433` This site parses caller-controlled EXIF or JPEG bytes through raw pointer or slice bridging.
+- `safe/src/parser/data_load.rs:437` This site parses caller-controlled EXIF or JPEG bytes through raw pointer or slice bridging.
+- `safe/src/parser/data_load.rs:441` This site parses caller-controlled EXIF or JPEG bytes through raw pointer or slice bridging.
+- `safe/src/parser/data_load.rs:447` This site parses caller-controlled EXIF or JPEG bytes through raw pointer or slice bridging.
+- `safe/src/parser/data_load.rs:456` This site parses caller-controlled EXIF or JPEG bytes through raw pointer or slice bridging.
+- `safe/src/parser/data_load.rs:457` This site parses caller-controlled EXIF or JPEG bytes through raw pointer or slice bridging.
+- `safe/src/parser/data_load.rs:466` This site parses caller-controlled EXIF or JPEG bytes through raw pointer or slice bridging.
+- `safe/src/parser/data_load.rs:471` This site parses caller-controlled EXIF or JPEG bytes through raw pointer or slice bridging.
+- `safe/src/parser/data_load.rs:476` This site parses caller-controlled EXIF or JPEG bytes through raw pointer or slice bridging.
+- `safe/src/parser/data_load.rs:477` This site parses caller-controlled EXIF or JPEG bytes through raw pointer or slice bridging.
+- `safe/src/parser/data_load.rs:478` This site parses caller-controlled EXIF or JPEG bytes through raw pointer or slice bridging.
+- `safe/src/parser/data_load.rs:483` This site parses caller-controlled EXIF or JPEG bytes through raw pointer or slice bridging.
+- `safe/src/parser/data_load.rs:488` This site parses caller-controlled EXIF or JPEG bytes through raw pointer or slice bridging.
+- `safe/src/parser/data_load.rs:492` This site parses caller-controlled EXIF or JPEG bytes through raw pointer or slice bridging.
+- `safe/src/parser/data_load.rs:493` This site parses caller-controlled EXIF or JPEG bytes through raw pointer or slice bridging.
+
+#### safe/src/parser/data_save.rs
+- `safe/src/parser/data_save.rs:109` This site serializes raw EXIF structures into caller-owned output buffers.
+- `safe/src/parser/data_save.rs:110` This site serializes raw EXIF structures into caller-owned output buffers.
+- `safe/src/parser/data_save.rs:117` This site serializes raw EXIF structures into caller-owned output buffers.
+- `safe/src/parser/data_save.rs:136` This site serializes raw EXIF structures into caller-owned output buffers.
+- `safe/src/parser/data_save.rs:160` This site serializes raw EXIF structures into caller-owned output buffers.
+- `safe/src/parser/data_save.rs:164` This site serializes raw EXIF structures into caller-owned output buffers.
+- `safe/src/parser/data_save.rs:166` This site serializes raw EXIF structures into caller-owned output buffers.
+- `safe/src/parser/data_save.rs:174` This site serializes raw EXIF structures into caller-owned output buffers.
+- `safe/src/parser/data_save.rs:179` This site serializes raw EXIF structures into caller-owned output buffers.
+- `safe/src/parser/data_save.rs:182` This site serializes raw EXIF structures into caller-owned output buffers.
+- `safe/src/parser/data_save.rs:185` This site serializes raw EXIF structures into caller-owned output buffers.
+- `safe/src/parser/data_save.rs:189` This site serializes raw EXIF structures into caller-owned output buffers.
+- `safe/src/parser/data_save.rs:190` This site serializes raw EXIF structures into caller-owned output buffers.
+- `safe/src/parser/data_save.rs:191` This site serializes raw EXIF structures into caller-owned output buffers.
+- `safe/src/parser/data_save.rs:220` This site serializes raw EXIF structures into caller-owned output buffers.
+- `safe/src/parser/data_save.rs:221` This site serializes raw EXIF structures into caller-owned output buffers.
+- `safe/src/parser/data_save.rs:226` This site serializes raw EXIF structures into caller-owned output buffers.
+- `safe/src/parser/data_save.rs:231` This site serializes raw EXIF structures into caller-owned output buffers.
+- `safe/src/parser/data_save.rs:238` This site serializes raw EXIF structures into caller-owned output buffers.
+- `safe/src/parser/data_save.rs:239` This site serializes raw EXIF structures into caller-owned output buffers.
+- `safe/src/parser/data_save.rs:243` This site serializes raw EXIF structures into caller-owned output buffers.
+- `safe/src/parser/data_save.rs:248` This site serializes raw EXIF structures into caller-owned output buffers.
+- `safe/src/parser/data_save.rs:253` This site serializes raw EXIF structures into caller-owned output buffers.
+- `safe/src/parser/data_save.rs:287` This site serializes raw EXIF structures into caller-owned output buffers.
+- `safe/src/parser/data_save.rs:298` This site serializes raw EXIF structures into caller-owned output buffers.
+- `safe/src/parser/data_save.rs:300` This site serializes raw EXIF structures into caller-owned output buffers.
+- `safe/src/parser/data_save.rs:301` This site serializes raw EXIF structures into caller-owned output buffers.
+- `safe/src/parser/data_save.rs:302` This site serializes raw EXIF structures into caller-owned output buffers.
+- `safe/src/parser/data_save.rs:316` This site serializes raw EXIF structures into caller-owned output buffers.
+- `safe/src/parser/data_save.rs:317` This site serializes raw EXIF structures into caller-owned output buffers.
+- `safe/src/parser/data_save.rs:331` This site serializes raw EXIF structures into caller-owned output buffers.
+- `safe/src/parser/data_save.rs:332` This site serializes raw EXIF structures into caller-owned output buffers.
+- `safe/src/parser/data_save.rs:345` This site serializes raw EXIF structures into caller-owned output buffers.
+- `safe/src/parser/data_save.rs:346` This site serializes raw EXIF structures into caller-owned output buffers.
+- `safe/src/parser/data_save.rs:363` This site serializes raw EXIF structures into caller-owned output buffers.
+- `safe/src/parser/data_save.rs:374` This site serializes raw EXIF structures into caller-owned output buffers.
+- `safe/src/parser/data_save.rs:375` This site serializes raw EXIF structures into caller-owned output buffers.
+- `safe/src/parser/data_save.rs:388` This site serializes raw EXIF structures into caller-owned output buffers.
+- `safe/src/parser/data_save.rs:401` This site serializes raw EXIF structures into caller-owned output buffers.
+- `safe/src/parser/data_save.rs:407` This site serializes raw EXIF structures into caller-owned output buffers.
+- `safe/src/parser/data_save.rs:410` This site serializes raw EXIF structures into caller-owned output buffers.
+- `safe/src/parser/data_save.rs:421` This site serializes raw EXIF structures into caller-owned output buffers.
+- `safe/src/parser/data_save.rs:429` This site serializes raw EXIF structures into caller-owned output buffers.
+- `safe/src/parser/data_save.rs:437` This site serializes raw EXIF structures into caller-owned output buffers.
+- `safe/src/parser/data_save.rs:442` This site serializes raw EXIF structures into caller-owned output buffers.
+
+#### safe/src/parser/loader.rs
+- `safe/src/parser/loader.rs:79` This site manages loader buffers and ownership through raw pointer and allocator bridging.
+- `safe/src/parser/loader.rs:84` This site manages loader buffers and ownership through raw pointer and allocator bridging.
+- `safe/src/parser/loader.rs:89` This site manages loader buffers and ownership through raw pointer and allocator bridging.
+- `safe/src/parser/loader.rs:95` This site manages loader buffers and ownership through raw pointer and allocator bridging.
+- `safe/src/parser/loader.rs:101` This site manages loader buffers and ownership through raw pointer and allocator bridging.
+- `safe/src/parser/loader.rs:109` This site manages loader buffers and ownership through raw pointer and allocator bridging.
+- `safe/src/parser/loader.rs:132` This site manages loader buffers and ownership through raw pointer and allocator bridging.
+- `safe/src/parser/loader.rs:143` This site manages loader buffers and ownership through raw pointer and allocator bridging.
+- `safe/src/parser/loader.rs:146` This site manages loader buffers and ownership through raw pointer and allocator bridging.
+- `safe/src/parser/loader.rs:156` This site manages loader buffers and ownership through raw pointer and allocator bridging.
+- `safe/src/parser/loader.rs:174` This site manages loader buffers and ownership through raw pointer and allocator bridging.
+- `safe/src/parser/loader.rs:177` This site manages loader buffers and ownership through raw pointer and allocator bridging.
+- `safe/src/parser/loader.rs:188` This site manages loader buffers and ownership through raw pointer and allocator bridging.
+- `safe/src/parser/loader.rs:194` This site manages loader buffers and ownership through raw pointer and allocator bridging.
+- `safe/src/parser/loader.rs:211` This site manages loader buffers and ownership through raw pointer and allocator bridging.
+- `safe/src/parser/loader.rs:212` This site manages loader buffers and ownership through raw pointer and allocator bridging.
+- `safe/src/parser/loader.rs:216` This site manages loader buffers and ownership through raw pointer and allocator bridging.
+- `safe/src/parser/loader.rs:226` This site manages loader buffers and ownership through raw pointer and allocator bridging.
+- `safe/src/parser/loader.rs:298` This site manages loader buffers and ownership through raw pointer and allocator bridging.
+- `safe/src/parser/loader.rs:309` This site manages loader buffers and ownership through raw pointer and allocator bridging.
+- `safe/src/parser/loader.rs:315` This site manages loader buffers and ownership through raw pointer and allocator bridging.
+- `safe/src/parser/loader.rs:321` This site manages loader buffers and ownership through raw pointer and allocator bridging.
+- `safe/src/parser/loader.rs:326` This site manages loader buffers and ownership through raw pointer and allocator bridging.
+- `safe/src/parser/loader.rs:338` This site manages loader buffers and ownership through raw pointer and allocator bridging.
+- `safe/src/parser/loader.rs:339` This site manages loader buffers and ownership through raw pointer and allocator bridging.
+- `safe/src/parser/loader.rs:340` This site manages loader buffers and ownership through raw pointer and allocator bridging.
+- `safe/src/parser/loader.rs:341` This site manages loader buffers and ownership through raw pointer and allocator bridging.
+- `safe/src/parser/loader.rs:345` This site manages loader buffers and ownership through raw pointer and allocator bridging.
+- `safe/src/parser/loader.rs:350` This site manages loader buffers and ownership through raw pointer and allocator bridging.
+- `safe/src/parser/loader.rs:355` This site manages loader buffers and ownership through raw pointer and allocator bridging.
+- `safe/src/parser/loader.rs:360` This site manages loader buffers and ownership through raw pointer and allocator bridging.
+- `safe/src/parser/loader.rs:361` This site manages loader buffers and ownership through raw pointer and allocator bridging.
+- `safe/src/parser/loader.rs:369` This site manages loader buffers and ownership through raw pointer and allocator bridging.
+- `safe/src/parser/loader.rs:374` This site manages loader buffers and ownership through raw pointer and allocator bridging.
+- `safe/src/parser/loader.rs:377` This site manages loader buffers and ownership through raw pointer and allocator bridging.
+- `safe/src/parser/loader.rs:381` This site manages loader buffers and ownership through raw pointer and allocator bridging.
+- `safe/src/parser/loader.rs:386` This site manages loader buffers and ownership through raw pointer and allocator bridging.
+- `safe/src/parser/loader.rs:387` This site manages loader buffers and ownership through raw pointer and allocator bridging.
+- `safe/src/parser/loader.rs:399` This site manages loader buffers and ownership through raw pointer and allocator bridging.
+- `safe/src/parser/loader.rs:405` This site manages loader buffers and ownership through raw pointer and allocator bridging.
+- `safe/src/parser/loader.rs:412` This site manages loader buffers and ownership through raw pointer and allocator bridging.
+- `safe/src/parser/loader.rs:427` This site manages loader buffers and ownership through raw pointer and allocator bridging.
+- `safe/src/parser/loader.rs:433` This site manages loader buffers and ownership through raw pointer and allocator bridging.
+- `safe/src/parser/loader.rs:438` This site manages loader buffers and ownership through raw pointer and allocator bridging.
+- `safe/src/parser/loader.rs:443` This site manages loader buffers and ownership through raw pointer and allocator bridging.
+- `safe/src/parser/loader.rs:448` This site manages loader buffers and ownership through raw pointer and allocator bridging.
+- `safe/src/parser/loader.rs:456` This site manages loader buffers and ownership through raw pointer and allocator bridging.
+- `safe/src/parser/loader.rs:465` This site manages loader buffers and ownership through raw pointer and allocator bridging.
+- `safe/src/parser/loader.rs:472` This site manages loader buffers and ownership through raw pointer and allocator bridging.
+- `safe/src/parser/loader.rs:482` This site manages loader buffers and ownership through raw pointer and allocator bridging.
+- `safe/src/parser/loader.rs:487` This site manages loader buffers and ownership through raw pointer and allocator bridging.
+- `safe/src/parser/loader.rs:488` This site manages loader buffers and ownership through raw pointer and allocator bridging.
+- `safe/src/parser/loader.rs:497` This site manages loader buffers and ownership through raw pointer and allocator bridging.
+- `safe/src/parser/loader.rs:501` This site manages loader buffers and ownership through raw pointer and allocator bridging.
+- `safe/src/parser/loader.rs:502` This site manages loader buffers and ownership through raw pointer and allocator bridging.
+- `safe/src/parser/loader.rs:506` This site manages loader buffers and ownership through raw pointer and allocator bridging.
+- `safe/src/parser/loader.rs:507` This site manages loader buffers and ownership through raw pointer and allocator bridging.
+- `safe/src/parser/loader.rs:511` This site manages loader buffers and ownership through raw pointer and allocator bridging.
+- `safe/src/parser/loader.rs:512` This site manages loader buffers and ownership through raw pointer and allocator bridging.
+- `safe/src/parser/loader.rs:516` This site manages loader buffers and ownership through raw pointer and allocator bridging.
+- `safe/src/parser/loader.rs:517` This site manages loader buffers and ownership through raw pointer and allocator bridging.
+- `safe/src/parser/loader.rs:521` This site manages loader buffers and ownership through raw pointer and allocator bridging.
+- `safe/src/parser/loader.rs:526` This site manages loader buffers and ownership through raw pointer and allocator bridging.
+- `safe/src/parser/loader.rs:532` This site manages loader buffers and ownership through raw pointer and allocator bridging.
+- `safe/src/parser/loader.rs:533` This site manages loader buffers and ownership through raw pointer and allocator bridging.
+- `safe/src/parser/loader.rs:537` This site manages loader buffers and ownership through raw pointer and allocator bridging.
+- `safe/src/parser/loader.rs:538` This site manages loader buffers and ownership through raw pointer and allocator bridging.
+- `safe/src/parser/loader.rs:544` This site manages loader buffers and ownership through raw pointer and allocator bridging.
+- `safe/src/parser/loader.rs:549` This site manages loader buffers and ownership through raw pointer and allocator bridging.
+- `safe/src/parser/loader.rs:553` This site manages loader buffers and ownership through raw pointer and allocator bridging.
+- `safe/src/parser/loader.rs:554` This site manages loader buffers and ownership through raw pointer and allocator bridging.
+
+#### safe/src/primitives/utils.rs
+- `safe/src/primitives/utils.rs:18` This site reinterprets raw scalar buffers for the public byte-order helper ABI.
+- `safe/src/primitives/utils.rs:37` This site reinterprets raw scalar buffers for the public byte-order helper ABI.
+- `safe/src/primitives/utils.rs:62` This site reinterprets raw scalar buffers for the public byte-order helper ABI.
+- `safe/src/primitives/utils.rs:83` This site reinterprets raw scalar buffers for the public byte-order helper ABI.
+- `safe/src/primitives/utils.rs:103` This site reinterprets raw scalar buffers for the public byte-order helper ABI.
+- `safe/src/primitives/utils.rs:111` This site reinterprets raw scalar buffers for the public byte-order helper ABI.
+- `safe/src/primitives/utils.rs:116` This site reinterprets raw scalar buffers for the public byte-order helper ABI.
+- `safe/src/primitives/utils.rs:125` This site reinterprets raw scalar buffers for the public byte-order helper ABI.
+- `safe/src/primitives/utils.rs:134` This site reinterprets raw scalar buffers for the public byte-order helper ABI.
+- `safe/src/primitives/utils.rs:139` This site reinterprets raw scalar buffers for the public byte-order helper ABI.
+- `safe/src/primitives/utils.rs:144` This site reinterprets raw scalar buffers for the public byte-order helper ABI.
+- `safe/src/primitives/utils.rs:153` This site reinterprets raw scalar buffers for the public byte-order helper ABI.
+- `safe/src/primitives/utils.rs:162` This site reinterprets raw scalar buffers for the public byte-order helper ABI.
+- `safe/src/primitives/utils.rs:175` This site reinterprets raw scalar buffers for the public byte-order helper ABI.
+- `safe/src/primitives/utils.rs:181` This site reinterprets raw scalar buffers for the public byte-order helper ABI.
+- `safe/src/primitives/utils.rs:194` This site reinterprets raw scalar buffers for the public byte-order helper ABI.
+- `safe/src/primitives/utils.rs:200` This site reinterprets raw scalar buffers for the public byte-order helper ABI.
+- `safe/src/primitives/utils.rs:210` This site reinterprets raw scalar buffers for the public byte-order helper ABI.
+- `safe/src/primitives/utils.rs:215` This site reinterprets raw scalar buffers for the public byte-order helper ABI.
+- `safe/src/primitives/utils.rs:226` This site reinterprets raw scalar buffers for the public byte-order helper ABI.
+- `safe/src/primitives/utils.rs:234` This site reinterprets raw scalar buffers for the public byte-order helper ABI.
+- `safe/src/primitives/utils.rs:260` This site reinterprets raw scalar buffers for the public byte-order helper ABI.
+- `safe/src/primitives/utils.rs:278` This site reinterprets raw scalar buffers for the public byte-order helper ABI.
+- `safe/src/primitives/utils.rs:284` This site reinterprets raw scalar buffers for the public byte-order helper ABI.
+- `safe/src/primitives/utils.rs:297` This site reinterprets raw scalar buffers for the public byte-order helper ABI.
+- `safe/src/primitives/utils.rs:302` This site reinterprets raw scalar buffers for the public byte-order helper ABI.
+
+#### safe/src/runtime/cstdio.rs
+- `safe/src/runtime/cstdio.rs:5` This site crosses into variadic stdio for dump-style output.
+- `safe/src/runtime/cstdio.rs:14` This site crosses into variadic stdio for dump-style output.
+
+#### safe/src/runtime/log.rs
+- `safe/src/runtime/log.rs:54` This site allocates or mutates raw ExifLog state and callback plumbing.
+- `safe/src/runtime/log.rs:55` This site allocates or mutates raw ExifLog state and callback plumbing.
+- `safe/src/runtime/log.rs:61` This site allocates or mutates raw ExifLog state and callback plumbing.
+- `safe/src/runtime/log.rs:72` This site allocates or mutates raw ExifLog state and callback plumbing.
+- `safe/src/runtime/log.rs:73` This site allocates or mutates raw ExifLog state and callback plumbing.
+- `safe/src/runtime/log.rs:74` This site allocates or mutates raw ExifLog state and callback plumbing.
+- `safe/src/runtime/log.rs:75` This site allocates or mutates raw ExifLog state and callback plumbing.
+- `safe/src/runtime/log.rs:79` This site allocates or mutates raw ExifLog state and callback plumbing.
+- `safe/src/runtime/log.rs:84` This site allocates or mutates raw ExifLog state and callback plumbing.
+- `safe/src/runtime/log.rs:88` This site allocates or mutates raw ExifLog state and callback plumbing.
+- `safe/src/runtime/log.rs:93` This site allocates or mutates raw ExifLog state and callback plumbing.
+- `safe/src/runtime/log.rs:94` This site allocates or mutates raw ExifLog state and callback plumbing.
+- `safe/src/runtime/log.rs:95` This site allocates or mutates raw ExifLog state and callback plumbing.
+- `safe/src/runtime/log.rs:98` This site allocates or mutates raw ExifLog state and callback plumbing.
+- `safe/src/runtime/log.rs:103` This site allocates or mutates raw ExifLog state and callback plumbing.
+- `safe/src/runtime/log.rs:108` This site allocates or mutates raw ExifLog state and callback plumbing.
+- `safe/src/runtime/log.rs:112` This site allocates or mutates raw ExifLog state and callback plumbing.
+- `safe/src/runtime/log.rs:121` This site allocates or mutates raw ExifLog state and callback plumbing.
+- `safe/src/runtime/log.rs:140` This site allocates or mutates raw ExifLog state and callback plumbing.
+- `safe/src/runtime/log.rs:141` This site allocates or mutates raw ExifLog state and callback plumbing.
+- `safe/src/runtime/log.rs:146` This site allocates or mutates raw ExifLog state and callback plumbing.
+- `safe/src/runtime/log.rs:150` This site allocates or mutates raw ExifLog state and callback plumbing.
+- `safe/src/runtime/log.rs:151` This site allocates or mutates raw ExifLog state and callback plumbing.
+- `safe/src/runtime/log.rs:155` This site allocates or mutates raw ExifLog state and callback plumbing.
+- `safe/src/runtime/log.rs:156` This site allocates or mutates raw ExifLog state and callback plumbing.
+- `safe/src/runtime/log.rs:160` This site allocates or mutates raw ExifLog state and callback plumbing.
+- `safe/src/runtime/log.rs:161` This site allocates or mutates raw ExifLog state and callback plumbing.
+- `safe/src/runtime/log.rs:165` This site allocates or mutates raw ExifLog state and callback plumbing.
+- `safe/src/runtime/log.rs:170` This site allocates or mutates raw ExifLog state and callback plumbing.
+
+#### safe/src/runtime/mem.rs
+- `safe/src/runtime/mem.rs:8` This site bridges ExifMem through libc allocation callbacks and raw pointers.
+- `safe/src/runtime/mem.rs:27` This site bridges ExifMem through libc allocation callbacks and raw pointers.
+- `safe/src/runtime/mem.rs:28` This site bridges ExifMem through libc allocation callbacks and raw pointers.
+- `safe/src/runtime/mem.rs:31` This site bridges ExifMem through libc allocation callbacks and raw pointers.
+- `safe/src/runtime/mem.rs:32` This site bridges ExifMem through libc allocation callbacks and raw pointers.
+- `safe/src/runtime/mem.rs:35` This site bridges ExifMem through libc allocation callbacks and raw pointers.
+- `safe/src/runtime/mem.rs:36` This site bridges ExifMem through libc allocation callbacks and raw pointers.
+- `safe/src/runtime/mem.rs:39` This site bridges ExifMem through libc allocation callbacks and raw pointers.
+- `safe/src/runtime/mem.rs:50` This site bridges ExifMem through libc allocation callbacks and raw pointers.
+- `safe/src/runtime/mem.rs:52` This site bridges ExifMem through libc allocation callbacks and raw pointers.
+- `safe/src/runtime/mem.rs:61` This site bridges ExifMem through libc allocation callbacks and raw pointers.
+- `safe/src/runtime/mem.rs:70` This site bridges ExifMem through libc allocation callbacks and raw pointers.
+- `safe/src/runtime/mem.rs:71` This site bridges ExifMem through libc allocation callbacks and raw pointers.
+- `safe/src/runtime/mem.rs:80` This site bridges ExifMem through libc allocation callbacks and raw pointers.
+- `safe/src/runtime/mem.rs:85` This site bridges ExifMem through libc allocation callbacks and raw pointers.
+- `safe/src/runtime/mem.rs:89` This site bridges ExifMem through libc allocation callbacks and raw pointers.
+- `safe/src/runtime/mem.rs:94` This site bridges ExifMem through libc allocation callbacks and raw pointers.
+- `safe/src/runtime/mem.rs:95` This site bridges ExifMem through libc allocation callbacks and raw pointers.
+- `safe/src/runtime/mem.rs:99` This site bridges ExifMem through libc allocation callbacks and raw pointers.
+- `safe/src/runtime/mem.rs:104` This site bridges ExifMem through libc allocation callbacks and raw pointers.
+- `safe/src/runtime/mem.rs:107` This site bridges ExifMem through libc allocation callbacks and raw pointers.
+- `safe/src/runtime/mem.rs:111` This site bridges ExifMem through libc allocation callbacks and raw pointers.
+- `safe/src/runtime/mem.rs:116` This site bridges ExifMem through libc allocation callbacks and raw pointers.
+- `safe/src/runtime/mem.rs:118` This site bridges ExifMem through libc allocation callbacks and raw pointers.
+- `safe/src/runtime/mem.rs:121` This site bridges ExifMem through libc allocation callbacks and raw pointers.
+- `safe/src/runtime/mem.rs:127` This site bridges ExifMem through libc allocation callbacks and raw pointers.
+- `safe/src/runtime/mem.rs:136` This site bridges ExifMem through libc allocation callbacks and raw pointers.
+- `safe/src/runtime/mem.rs:137` This site bridges ExifMem through libc allocation callbacks and raw pointers.
+- `safe/src/runtime/mem.rs:143` This site bridges ExifMem through libc allocation callbacks and raw pointers.
+- `safe/src/runtime/mem.rs:148` This site bridges ExifMem through libc allocation callbacks and raw pointers.
+- `safe/src/runtime/mem.rs:155` This site bridges ExifMem through libc allocation callbacks and raw pointers.
+- `safe/src/runtime/mem.rs:159` This site bridges ExifMem through libc allocation callbacks and raw pointers.
+- `safe/src/runtime/mem.rs:160` This site bridges ExifMem through libc allocation callbacks and raw pointers.
+- `safe/src/runtime/mem.rs:164` This site bridges ExifMem through libc allocation callbacks and raw pointers.
+- `safe/src/runtime/mem.rs:165` This site bridges ExifMem through libc allocation callbacks and raw pointers.
+- `safe/src/runtime/mem.rs:169` This site bridges ExifMem through libc allocation callbacks and raw pointers.
+- `safe/src/runtime/mem.rs:170` This site bridges ExifMem through libc allocation callbacks and raw pointers.
+- `safe/src/runtime/mem.rs:176` This site bridges ExifMem through libc allocation callbacks and raw pointers.
+- `safe/src/runtime/mem.rs:181` This site bridges ExifMem through libc allocation callbacks and raw pointers.
+- `safe/src/runtime/mem.rs:187` This site bridges ExifMem through libc allocation callbacks and raw pointers.
+- `safe/src/runtime/mem.rs:188` This site bridges ExifMem through libc allocation callbacks and raw pointers.
+
+#### safe/src/tables/tag_table.rs
+- `safe/src/tables/tag_table.rs:196` This site dereferences caller-provided C string data during tag lookup.
+- `safe/src/tables/tag_table.rs:202` This site dereferences caller-provided C string data during tag lookup.
+
+#### safe/tests/abi_layout.rs
+- `safe/tests/abi_layout.rs:15` This site performs raw field-address arithmetic to verify repr(C) layout.
+
+#### safe/tests/cve_regressions.rs
+- `safe/tests/cve_regressions.rs:6` This site drives malformed inputs or raw field reads through the public C ABI.
+- `safe/tests/cve_regressions.rs:60` This site drives malformed inputs or raw field reads through the public C ABI.
+- `safe/tests/cve_regressions.rs:78` This site drives malformed inputs or raw field reads through the public C ABI.
+- `safe/tests/cve_regressions.rs:88` This site drives malformed inputs or raw field reads through the public C ABI.
+- `safe/tests/cve_regressions.rs:100` This site drives malformed inputs or raw field reads through the public C ABI.
+- `safe/tests/cve_regressions.rs:203` This site drives malformed inputs or raw field reads through the public C ABI.
+- `safe/tests/cve_regressions.rs:214` This site drives malformed inputs or raw field reads through the public C ABI.
+- `safe/tests/cve_regressions.rs:224` This site drives malformed inputs or raw field reads through the public C ABI.
+- `safe/tests/cve_regressions.rs:238` This site drives malformed inputs or raw field reads through the public C ABI.
+- `safe/tests/cve_regressions.rs:254` This site drives malformed inputs or raw field reads through the public C ABI.
+- `safe/tests/cve_regressions.rs:276` This site drives malformed inputs or raw field reads through the public C ABI.
+- `safe/tests/cve_regressions.rs:277` This site drives malformed inputs or raw field reads through the public C ABI.
+- `safe/tests/cve_regressions.rs:292` This site drives malformed inputs or raw field reads through the public C ABI.
+- `safe/tests/cve_regressions.rs:297` This site drives malformed inputs or raw field reads through the public C ABI.
+- `safe/tests/cve_regressions.rs:312` This site drives malformed inputs or raw field reads through the public C ABI.
+- `safe/tests/cve_regressions.rs:316` This site drives malformed inputs or raw field reads through the public C ABI.
+- `safe/tests/cve_regressions.rs:328` This site drives malformed inputs or raw field reads through the public C ABI.
+
+#### safe/tests/object_model.rs
+- `safe/tests/object_model.rs:8` This site exercises public C ABI ownership and returned pointer behavior directly.
+- `safe/tests/object_model.rs:47` This site exercises public C ABI ownership and returned pointer behavior directly.
+- `safe/tests/object_model.rs:82` This site exercises public C ABI ownership and returned pointer behavior directly.
+- `safe/tests/object_model.rs:120` This site exercises public C ABI ownership and returned pointer behavior directly.
+- `safe/tests/object_model.rs:147` This site exercises public C ABI ownership and returned pointer behavior directly.
+- `safe/tests/object_model.rs:210` This site exercises public C ABI ownership and returned pointer behavior directly.
+
+#### safe/tests/primitives_tables.rs
+- `safe/tests/primitives_tables.rs:12` This site probes ABI callbacks, null handling, or raw integer helpers directly.
+- `safe/tests/primitives_tables.rs:41` This site probes ABI callbacks, null handling, or raw integer helpers directly.
+- `safe/tests/primitives_tables.rs:43` This site probes ABI callbacks, null handling, or raw integer helpers directly.
+- `safe/tests/primitives_tables.rs:46` This site probes ABI callbacks, null handling, or raw integer helpers directly.
+- `safe/tests/primitives_tables.rs:48` This site probes ABI callbacks, null handling, or raw integer helpers directly.
+- `safe/tests/primitives_tables.rs:51` This site probes ABI callbacks, null handling, or raw integer helpers directly.
+- `safe/tests/primitives_tables.rs:53` This site probes ABI callbacks, null handling, or raw integer helpers directly.
+- `safe/tests/primitives_tables.rs:111` This site probes ABI callbacks, null handling, or raw integer helpers directly.
+- `safe/tests/primitives_tables.rs:112` This site probes ABI callbacks, null handling, or raw integer helpers directly.
+- `safe/tests/primitives_tables.rs:113` This site probes ABI callbacks, null handling, or raw integer helpers directly.
+- `safe/tests/primitives_tables.rs:114` This site probes ABI callbacks, null handling, or raw integer helpers directly.
+- `safe/tests/primitives_tables.rs:120` This site probes ABI callbacks, null handling, or raw integer helpers directly.
+- `safe/tests/primitives_tables.rs:123` This site probes ABI callbacks, null handling, or raw integer helpers directly.
+- `safe/tests/primitives_tables.rs:138` This site probes ABI callbacks, null handling, or raw integer helpers directly.
+- `safe/tests/primitives_tables.rs:172` This site probes ABI callbacks, null handling, or raw integer helpers directly.
+- `safe/tests/primitives_tables.rs:211` This site probes ABI callbacks, null handling, or raw integer helpers directly.
+- `safe/tests/primitives_tables.rs:213` This site probes ABI callbacks, null handling, or raw integer helpers directly.
+- `safe/tests/primitives_tables.rs:285` This site probes ABI callbacks, null handling, or raw integer helpers directly.
+
+### Raw hits that are not additional unsafe implementation sites
+- `#[unsafe(no_mangle)]` appears throughout `safe/src/` because symbol export is modelled by Rust as an unsafe attribute; those lines are export markers, not extra raw dereference sites beyond the function bodies already inventoried above.
+- `safe/PORT.md` now contains this report’s own `unsafe` discussion, command lines, and exhaustive ledger, so its raw `grep` hits are documentation text, not new implementation sites.
+- `safe/SAFETY.md`, `safe/NEWS`, and `safe/debian/changelog` contain prose uses of the word `unsafe`; those are documentation hits, not code.
+- `safe/.artifacts/` duplicates packaged doc copies of `safe/NEWS`; those are generated package-cache hits, not new source sites.
+- The raw `grep -RIn` sweep also reports the known broken symlink below `safe/.artifacts/impl_09_final_release/libexif-dev/usr/lib/x86_64-linux-gnu/`; that stderr is evidence-capture noise, not a tracked-source unsafe site.
+
+## Remaining unsafe FFI beyond the original ABI/API boundary
+The handwritten foreign declarations under `safe/src/` are in `safe/src/lib.rs`, `safe/src/i18n.rs`, `safe/src/runtime/mem.rs`, `safe/src/runtime/cstdio.rs`, `safe/src/object/entry.rs`, `safe/src/mnote/apple.rs`, `safe/src/mnote/canon.rs`, `safe/src/mnote/fuji.rs`, `safe/src/mnote/olympus.rs`, and `safe/src/mnote/pentax.rs`. The MakerNote `exif_log` redeclarations are intentionally excluded from the dependency count below: they are internal self-reentry into the intended libexif logging ABI, not new third-party library dependencies.
+
+### Non-ABI foreign/library surface
+- `bindtextdomain`, `bind_textdomain_codeset`, and `dgettext` at `safe/src/i18n.rs:11,12,13,43,44,51` are provided by the host gettext or glibc locale runtime. They are needed so `ExifLog` titles/messages and other translated strings still flow through the historical gettext domain. A future safe-Rust replacement would need either a Rust i18n layer or a deliberate decision to freeze/inline untranslated strings.
+- `calloc`, `realloc`, and `free` at `safe/src/runtime/mem.rs:9,10,11,27,31,35` are provided by libc. They are needed to preserve libexif’s `ExifMem` default allocator semantics, including caller-supplied allocator hooks and zero-initialized default allocation. A future replacement could wrap Rust allocation primitives behind the same ABI, but it would still need to preserve foreign allocator callback semantics for compatibility.
+- `printf` at `safe/src/runtime/cstdio.rs:6,15` is provided by libc. It is used only for dump-style textual output from functions such as `exif_data_dump` and `exif_entry_dump`. A future replacement could write to `std::io::stdout()` from Rust, but would need to preserve the existing formatting and buffering behavior.
+- `time` and `localtime_r` at `safe/src/object/entry.rs:132,133,876,878` are provided by libc. They are used to synthesize default EXIF date-time strings during entry initialization. A future replacement could use Rust time/date primitives, but would need an explicit policy for local-time formatting and libc-compatible output.
+- `exif_log_shim_anchor` in `safe/src/lib.rs:31,36` plus the exported `exif_log` and `exif_logv` implementations in `safe/cshim/exif-log-shim.c` are provided by the local C shim compiled by `cc`. They are needed because stable Rust still cannot export the historical C variadic logging ABI directly. The plausible removal path is either future stable Rust support for the required variadic ABI or an ABI-breaking redesign that stops exposing variadic logging entirely.
+
+### Reconciliation with the packaged shared object
+`objdump -p` against the real shared object in `safe/.artifacts/impl_09_final_release/root/usr/lib/x86_64-linux-gnu/` shows four `NEEDED` entries: the GCC support runtime, the math runtime, the C runtime, and the ELF loader.
+- The C runtime entry matches the explicit libc-facing declarations above.
+- The math-runtime entry is a dependency of the final ELF even though the handwritten Rust sources do not declare a direct foreign boundary to it; this is an observed linker result, not a hand-written FFI surface.
+- The GCC-support-runtime entry is likewise an observed toolchain/runtime dependency rather than a new handwritten FFI declaration in `safe/src`.
+- No extra libintl runtime edge was present in the packaged library; in this environment the gettext entry points used by `safe/src/i18n.rs` resolve without adding a separate shared-library dependency.
+
+`nm -D --defined-only` and `objdump -T` on the packaged library confirm that the expected ABI exports are present, including `exif_data_load_data`, `exif_data_save_data`, `exif_loader_new`, `exif_entry_get_value`, `exif_mem_new_default`, `exif_log`, `exif_logv`, `mnote_canon_tag_get_name`, `mnote_olympus_tag_get_name`, and `mnote_pentax_tag_get_name`.
+
+## Remaining issues
+### Harness status
+- `cargo test --manifest-path safe/Cargo.toml --release`: passed. The run still emitted dead-code warnings for unused constants in `safe/src/mnote/canon.rs` and `safe/src/mnote/olympus.rs`.
+- `bash safe/tests/run-cve-regressions.sh`: passed. It repeated the same dead-code warnings.
+- `bash safe/tests/run-original-test-suite.sh`: passed. This wrapper transitively exercised `safe/tests/run-c-test.sh`, `safe/tests/run-test-mnote-matrix.sh`, `safe/tests/run-original-shell-test.sh`, and `safe/tests/run-original-nls-test.sh`; they were not rerun separately outside the wrapper.
+- `PACKAGE_BUILD_ROOT=/home/yans/safelibs/pipeline/ports/port-libexif/safe/.artifacts/impl_09_final_release bash` against the package-build harness under `safe/tests/`: passed and refreshed the reusable package root for the current code inputs. Before the reuse-only harnesses ran, freshness was revalidated by requiring `safe/.artifacts/impl_09_final_release/metadata/validated.ok`, matching `safe/.artifacts/impl_09_final_release/metadata/source-commit.txt` to `git rev-parse HEAD`, and `cmp`-checking `safe/.artifacts/impl_09_final_release/metadata/package-inputs.sha256` as the full stored package-input manifest against the live manifest output from that harness. The same reuse gate followed the split package roots from the package-build harness: it required the three packaged Debian artifacts under `safe/.artifacts/impl_09_final_release/artifacts/`, runtime libraries and locale payloads under `safe/.artifacts/impl_09_final_release/libexif12/usr/`, development libraries, the pkg-config directory `safe/.artifacts/impl_09_final_release/libexif-dev/usr/lib/x86_64-linux-gnu/pkgconfig/`, and the full installed header set under `safe/.artifacts/impl_09_final_release/libexif-dev/usr/`, documentation, examples, and doc-base metadata under `safe/.artifacts/impl_09_final_release/libexif-doc/usr/`, and overlay-consistency checks under `safe/.artifacts/impl_09_final_release/root/usr/lib/x86_64-linux-gnu/`. Concretely, the validator checked the real shared object in `safe/.artifacts/impl_09_final_release/libexif12/usr/lib/x86_64-linux-gnu/`, the SONAME symlink beside it, every locale derived from the compiled gettext catalog files already present in `safe/po/` and installed under `safe/.artifacts/impl_09_final_release/libexif12/usr/share/locale/` (for example `safe/po/de.gmo` mapping to `safe/.artifacts/impl_09_final_release/libexif12/usr/share/locale/de/LC_MESSAGES/libexif-12.mo`), `safe/.artifacts/impl_09_final_release/libexif-dev/usr/lib/x86_64-linux-gnu/libexif.a`, the development symlink in that same library directory, the installed pkg-config metadata file inside `safe/.artifacts/impl_09_final_release/libexif-dev/usr/lib/x86_64-linux-gnu/pkgconfig/`, every installed header enumerated by the package-build harness, and the checked doc payloads under the split doc root, while also requiring the overlay-root symlinks to resolve to the real shared object in `safe/.artifacts/impl_09_final_release/root/usr/lib/x86_64-linux-gnu/`. The packaging step still emitted `dwz: ... .debug_info section not present` and `dpkg-shlibdeps: warning: diversions involved - output may be incorrect` for the loader usr-merge diversion.
+- `LIBEXIF_REQUIRE_REUSE=1 PACKAGE_BUILD_ROOT=/home/yans/safelibs/pipeline/ports/port-libexif/safe/.artifacts/impl_09_final_release bash safe/tests/run-export-compare.sh`: passed.
+- `LIBEXIF_REQUIRE_REUSE=1 PACKAGE_BUILD_ROOT=/home/yans/safelibs/pipeline/ports/port-libexif/safe/.artifacts/impl_09_final_release bash safe/tests/run-c-compile-smoke.sh`: passed.
+- `LIBEXIF_REQUIRE_REUSE=1 PACKAGE_BUILD_ROOT=/home/yans/safelibs/pipeline/ports/port-libexif/safe/.artifacts/impl_09_final_release bash safe/tests/run-performance-compare.sh`: failed with exit status `2`; the observed stderr was `make: *** No rule to make target 'all'.  Stop.` while `ensure_original_library` tried to rebuild the upstream baseline library.
+- `LIBEXIF_REQUIRE_REUSE=1 PACKAGE_BUILD_ROOT=/home/yans/safelibs/pipeline/ports/port-libexif/safe/.artifacts/impl_09_final_release bash safe/tests/run-original-object-link-compat.sh`: failed with exit status `2`; the observed stderr reported a missing generated upstream configuration header, triggered while `make -C original/test ...` attempted to build upstream test objects without generated headers. This blocker is separate from the stale path defect in the link-compat manifests.
+
+### Static and workflow caveats
+- `safe/tests/link-compat/object-manifest.txt` and `safe/tests/link-compat/run-manifest.txt` still hard-code absolute paths from another checkout. The current object-link harness fails earlier on missing generated upstream configuration headers, but the manifests are independently non-portable and would still need repair after that earlier blocker is solved.
+- `safe/tests/original-sh/check-failmalloc.sh:33` still contains a `FIXME` about auto-determining iteration counts. The current wrapper run skipped the failmalloc check because `libfailmalloc` was unavailable, so the marker is a harness-maintenance note rather than a live library regression.
+- `safe/tests/original-sh/extract-parse.sh:16` still contains a `FIXME` noting that not all MakerNote differences are harmless. The wrapper passed in this run, so the comment currently documents manual-triage risk rather than a reproducing failure.
+- `safe/po/sk.po:4485` still contains `# TODO: check`; this is translation debt, not executable code debt.
+- `safe/PORT.md` itself now contains the literals `TODO` and `FIXME` while documenting this sweep and quoting the legacy marker sites; those self-hits are report text, not additional source debt.
+- The checkout was already off the planning hash when this phase started: `git rev-parse HEAD` returned `f27947987b805087255b5fccffc8ef93aaebf446`, and there was a preexisting tracked modification to `workflow.yaml` outside this phase’s allowlist. I left that unrelated tracked change untouched, which means the strict “clean tracked worktree” success condition from the phase prompt is not satisfiable from this starting state without overwriting unrelated work.
+
+### Downstream coverage
+`dependents.json` is explicit that it is representative rather than exhaustive: its `selection_policy` says the list is intentionally diverse rather than exhaustive, and its `metadata_source` is Ubuntu package metadata captured on 2026-04-03. `test-original.sh` documents the Docker-based downstream matrix that installs the safe package root into an Ubuntu 24.04 image and runs compile/runtime probes from `dependents.json`, but that downstream matrix was not rerun as part of this documentation refresh.
+
+### Relevant CVE classes and current guardrails
+- `relevant_cves.json` and `all_cves.json` remain the checked-in source of record for the reviewed libexif CVE set; `relevant_cves.json` still contains a stale historical `source_file` string pointing outside this checkout, so this report cites the checked-in JSON itself rather than that old path literal.
+- `CVE-2007-6351` (recursive or cyclic IFD traversal) is covered by `safe/src/parser/limits.rs:6,7,52,56` and `safe/src/parser/data_load.rs:276,286`, which bound recursion depth and reject repeated linked offsets. The regression is exercised by `safe/tests/cve_regressions.rs:232`.
+- `CVE-2018-20030` (parser work-factor exhaustion) is covered by `safe/src/parser/limits.rs:8,37,44` plus `safe/src/parser/data_load.rs:175,231,289`, which charge parse work and directory-entry counts against a bounded budget. The regression is exercised by `safe/tests/cve_regressions.rs:263`.
+- `CVE-2020-0181` (thumbnail offset or length overflow) is covered by `safe/src/parser/data_load.rs:167,175,291,412,420` together with `safe/src/parser/limits.rs:75,83`, which keep thumbnail offset and length arithmetic checked before copying. The regression is exercised by `safe/tests/cve_regressions.rs:272`.
+- `CVE-2020-0198` (entry payload arithmetic overflow) is covered by `safe/src/parser/data_load.rs:214,314` together with `safe/src/parser/limits.rs:75,83`, which reject oversized component-count and entry-offset calculations. The regression is exercised by `safe/tests/cve_regressions.rs:282`.
+- `CVE-2012-2837` (Olympus MakerNote divide-by-zero) is covered by zero-denominator checks in `safe/src/mnote/olympus.rs:2846,3023,3044`, which format malformed values as `"Unknown"` instead of dividing. The regression is exercised by `safe/tests/cve_regressions.rs:242`.
+- `CVE-2020-12767` (generic EXIF value divide-by-zero) is covered by the denominator checks in `safe/src/object/entry.rs:1431,1457,1682,1697,1713,1762,1777,1796,1816,1867,2032`, which fall back to textual fractions or `"Unknown"` instead of dividing by zero. The regression is exercised by `safe/tests/cve_regressions.rs:290`.
+- `CVE-2020-13114` (Canon MakerNote resource exhaustion) is covered by explicit caps in `safe/src/mnote/canon.rs:42,1408,1511,1521`, which bound the count and derived size of Canon MakerNote expansions before allocating or iterating further. The regression is exercised by `safe/tests/cve_regressions.rs:323`.
+
+## Dependencies and other libraries used
+### Cargo dependencies
+`safe/Cargo.toml` declares exactly one direct dependency: `cc = "1.2"` under `[build-dependencies]`. Its purpose is narrow and specific: compiling `safe/cshim/exif-log-shim.c` from `safe/build.rs`.
+
+`cargo tree --manifest-path safe/Cargo.toml` shows the only transitive Rust dependencies as `find-msvc-tools v0.1.9` and `shlex v1.3.0`, both pulled in by `cc`. No additional runtime Rust crates are present.
+
+### Build and packaging tools
+- The tree does not use `cbindgen` or `bindgen`.
+- The build-time toolchain visible in the checked-in files is `cargo`, `rustc`, `cc`, the system C preprocessor invoked by `safe/build.rs` to preprocess `original/libexif/exif-tag.c`, and Debian `dh` tooling from `safe/debian/rules`.
+- `safe/debian/control` declares Debian source build dependencies on `debhelper-compat (= 13)`, `cargo:native`, and `rustc:native`.
+- `safe/debian/control` also defines the binary package relationships: `libexif12` depends on `${shlibs:Depends}` and `${misc:Depends}`, `libexif-dev` depends on `libc6-dev`, `${misc:Depends}`, and the matching `libexif12`, and `libexif-doc` depends on `${misc:Depends}`.
+- `pkg-config` is not part of the crate build itself; `safe/tests/run-c-compile-smoke.sh` and `safe/tests/run-performance-compare.sh` export `PKG_CONFIG_PATH` to the merged overlay at `safe/.artifacts/impl_09_final_release/root/usr/lib/x86_64-linux-gnu/pkgconfig/` when they compile against the packaged library.
+
+### Runtime-linked system libraries
+The real shared object in `safe/.artifacts/impl_09_final_release/root/usr/lib/x86_64-linux-gnu/` currently links against the GCC support runtime, the math runtime, the C runtime, and the ELF loader.
+
+### Unsafe-code posture of the dependency tree
+- The port crate itself obviously does not forbid unsafe code; section 2 inventories its remaining tracked-source unsafe surface.
+- `cargo-geiger` is not installed in this environment, so no geiger-based dependency audit could be run.
+- The vendored local cargo registry copies of `cc-1.2.59`, `find-msvc-tools-0.1.9`, and `shlex-1.3.0` do not advertise `#![forbid(unsafe_code)]` in the inspected crate entry points.
+- `shlex-1.3.0` contains explicit `unsafe` UTF-8 unchecked conversions in its own crate sources.
+- `cc-1.2.59` contains explicit `unsafe` POSIX and async-executor internals, including `unsafe impl`, although those sites live only in the build helper crate, not in this port’s tracked sources.
+- `find-msvc-tools-0.1.9` contains Windows FFI, COM, registry, and `unsafe impl` code in its Windows support modules, again only as a transitive build-helper dependency.
+
+## How this document was produced
+This report was built from the live tree and reusable package root, not regenerated from older markdown. The key commands actually used were:
+- `git rev-parse HEAD`
+- `git status --short --untracked-files=all`
+- `cargo metadata --manifest-path safe/Cargo.toml --no-deps`
+- `cargo tree --manifest-path safe/Cargo.toml`
+- `command -v cargo-geiger >/dev/null 2>&1 && cargo geiger --version || echo 'cargo-geiger: unavailable'`
+- `grep -RIn '\bunsafe\b' safe || test $? -eq 2`
+- `rg -n '\bunsafe\s+extern\b|\bunsafe\s+fn\b|\bunsafe\s+impl\b|\bunsafe\s*\{|#\[unsafe\(no_mangle\)\]' safe/src safe/tests safe/build.rs`
+- `rg -n '\bunsafe\s+extern\b|\bunsafe\s+fn\b|\bunsafe\s+impl\b|\bunsafe\s*\{|#\[unsafe\(no_mangle\)\]' safe/src safe/tests safe/build.rs | awk -F: '$0 !~ /#\[unsafe\(no_mangle\)\]/{if (lines[$1] == "") {lines[$1] = $2} else {lines[$1] = lines[$1] "," $2}} END {for (f in lines) print f ":" lines[f]}' | sort`
+- `rg -n '^(pub\(crate\) )?unsafe fn|^unsafe extern "C" fn|^pub unsafe extern "C" fn|^unsafe extern "C" \{' safe/src safe/tests`
+- `rg -n 'TODO|FIXME' safe -S`
+- `cargo test --manifest-path safe/Cargo.toml --release`
+- `bash safe/tests/run-cve-regressions.sh`
+- `bash safe/tests/run-original-test-suite.sh`
+- `pkg_build=$(find safe/tests -maxdepth 1 -type f -name 'run-package-*.sh' | LC_ALL=C sort | head -n 1); bash "$pkg_build" --print-package-inputs-manifest`
+- `pkg_build=$(find safe/tests -maxdepth 1 -type f -name 'run-package-*.sh' | LC_ALL=C sort | head -n 1); tmp=$(mktemp); bash "$pkg_build" --print-package-inputs-manifest > "$tmp"; test -e safe/.artifacts/impl_09_final_release/metadata/validated.ok; cmp -s safe/.artifacts/impl_09_final_release/metadata/source-commit.txt <(git rev-parse HEAD); cmp -s safe/.artifacts/impl_09_final_release/metadata/package-inputs.sha256 "$tmp"`
+- `runtime_dir=safe/.artifacts/impl_09_final_release/libexif12/usr/lib/x86_64-linux-gnu; runtime_real=$(find "$runtime_dir" -maxdepth 1 -type f -name '*12.3.4' | LC_ALL=C sort | head -n 1); runtime_name=$(basename "$runtime_real"); runtime_link_name=${runtime_name%.3.4}; runtime_link="$runtime_dir/$runtime_link_name"; dev_root=safe/.artifacts/impl_09_final_release/libexif-dev; dev_static="$dev_root/usr/lib/x86_64-linux-gnu/libexif.a"; dev_dir=$(dirname "$dev_static"); dev_link_name=${runtime_name%.12.3.4}; dev_link="$dev_dir/$dev_link_name"; doc_root=safe/.artifacts/impl_09_final_release/libexif-doc; overlay_root=safe/.artifacts/impl_09_final_release/root; overlay_abs=$(realpath "$overlay_root"); overlay_dir="$overlay_abs/usr/lib/x86_64-linux-gnu"; pcdir="$dev_dir/pkgconfig"; pcfile=$(find "$pcdir" -maxdepth 1 -type f -name '*.pc' | LC_ALL=C sort | head -n 1); sec_note=$(find "$dev_root/usr/share/doc/libexif-dev" -maxdepth 1 -type f -name 'SECURITY*' | LC_ALL=C sort | head -n 1); headers='_stdint.h exif-byte-order.h exif-content.h exif-data-type.h exif-data.h exif-entry.h exif-format.h exif-ifd.h exif-loader.h exif-log.h exif-mem.h exif-mnote-data.h exif-tag.h exif-utils.h'; test -e safe/.artifacts/impl_09_final_release/artifacts/libexif12_0.6.24-1safelibs1_amd64.deb && test -e safe/.artifacts/impl_09_final_release/artifacts/libexif-dev_0.6.24-1safelibs1_amd64.deb && test -e safe/.artifacts/impl_09_final_release/artifacts/libexif-doc_0.6.24-1safelibs1_all.deb && test -f "$runtime_real" && test -L "$runtime_link" && test -f "$dev_static" && test -f "$overlay_dir/libexif.a" && test -L "$dev_link" && test "$(readlink "$runtime_link")" = "$runtime_name" && test "$(readlink "$dev_link")" = "$runtime_name" && test "$(readlink -f "$overlay_dir/$runtime_link_name")" = "$overlay_dir/$runtime_name" && test "$(readlink -f "$overlay_dir/$dev_link_name")" = "$overlay_dir/$runtime_name" && test -f "$pcfile" && test -f "$sec_note" && for header in $headers; do test -f "$dev_root/usr/include/libexif/$header"; done && test -f "$dev_root/usr/share/doc/libexif-dev/NEWS" && test -f "$dev_root/usr/share/doc/libexif-dev/README" && test -f "$doc_root/usr/share/doc/libexif-dev/libexif-api.html/index.html" && test -d "$doc_root/usr/share/doc-base" && while IFS= read -r example; do test -f "$doc_root/usr/share/doc/libexif-dev/examples/$(basename "$example")"; done < <(find safe/contrib/examples -maxdepth 1 -type f -name '*.c' | LC_ALL=C sort) && while IFS= read -r gmo; do lang=${gmo##*/}; lang=${lang%.gmo}; test -f "safe/.artifacts/impl_09_final_release/libexif12/usr/share/locale/$lang/LC_MESSAGES/libexif-12.mo"; done < <(find safe/po -maxdepth 1 -type f -name '*.gmo' | LC_ALL=C sort)`
+- `pkg_build=$(find safe/tests -maxdepth 1 -type f -name 'run-package-*.sh' | LC_ALL=C sort | head -n 1); PACKAGE_BUILD_ROOT=/home/yans/safelibs/pipeline/ports/port-libexif/safe/.artifacts/impl_09_final_release bash "$pkg_build"`
+- `LIBEXIF_REQUIRE_REUSE=1 PACKAGE_BUILD_ROOT=/home/yans/safelibs/pipeline/ports/port-libexif/safe/.artifacts/impl_09_final_release bash safe/tests/run-export-compare.sh`
+- `LIBEXIF_REQUIRE_REUSE=1 PACKAGE_BUILD_ROOT=/home/yans/safelibs/pipeline/ports/port-libexif/safe/.artifacts/impl_09_final_release bash safe/tests/run-c-compile-smoke.sh`
+- `LIBEXIF_REQUIRE_REUSE=1 PACKAGE_BUILD_ROOT=/home/yans/safelibs/pipeline/ports/port-libexif/safe/.artifacts/impl_09_final_release bash safe/tests/run-performance-compare.sh`
+- `LIBEXIF_REQUIRE_REUSE=1 PACKAGE_BUILD_ROOT=/home/yans/safelibs/pipeline/ports/port-libexif/safe/.artifacts/impl_09_final_release bash safe/tests/run-original-object-link-compat.sh`
+- `nl -ba safe/tests/run-c-compile-smoke.sh | sed -n '13,20p'`
+- `nl -ba safe/tests/run-performance-compare.sh | sed -n '19,20p;46,49p'`
+- `artifact_dir=safe/.artifacts/impl_09_final_release/root/usr/lib/x86_64-linux-gnu; artifact=$(find "$artifact_dir" -maxdepth 1 -type f -name '*12.3.4' | LC_ALL=C sort | head -n 1); nm -D --defined-only "$artifact"`
+- `artifact_dir=safe/.artifacts/impl_09_final_release/root/usr/lib/x86_64-linux-gnu; artifact=$(find "$artifact_dir" -maxdepth 1 -type f -name '*12.3.4' | LC_ALL=C sort | head -n 1); objdump -T "$artifact"`
+- `artifact_dir=safe/.artifacts/impl_09_final_release/root/usr/lib/x86_64-linux-gnu; artifact=$(find "$artifact_dir" -maxdepth 1 -type f -name '*12.3.4' | LC_ALL=C sort | head -n 1); objdump -p "$artifact"`
+
+The main source inputs consulted were `safe/Cargo.toml`, `safe/build.rs`, `safe/src/lib.rs`, `safe/src/ffi/types.rs`, `safe/src/ffi/panic_boundary.rs`, `safe/src/object/content.rs`, `safe/src/object/data.rs`, `safe/src/object/entry.rs`, `safe/src/parser/data_load.rs`, `safe/src/parser/data_save.rs`, `safe/src/parser/limits.rs`, `safe/src/parser/loader.rs`, `safe/src/runtime/mem.rs`, `safe/src/runtime/log.rs`, `safe/src/runtime/cstdio.rs`, `safe/src/mnote/mod.rs`, `safe/src/mnote/base.rs`, `safe/src/mnote/apple.rs`, `safe/src/mnote/canon.rs`, `safe/src/mnote/fuji.rs`, `safe/src/mnote/olympus.rs`, `safe/src/mnote/pentax.rs`, `safe/src/i18n.rs`, `safe/cshim/exif-log-shim.c`, `safe/include/libexif/`, the pkg-config templates under `safe/`, `safe/debian/control`, `safe/debian/rules`, `safe/tests/`, `dependents.json`, `relevant_cves.json`, `all_cves.json`, `test-original.sh`, and the packaged artifact root under `safe/.artifacts/impl_09_final_release`. The same package-build harness under `safe/tests/` is rerun after the documentation commit so `safe/.artifacts/impl_09_final_release/metadata/source-commit.txt` stays aligned with the final `HEAD`, `safe/.artifacts/impl_09_final_release/metadata/validated.ok` continues to mark a validated reusable root, and `safe/.artifacts/impl_09_final_release/metadata/package-inputs.sha256` remains the reusable full package-input manifest that is `cmp`-checked against the harness manifest output even though `safe/PORT.md` is intentionally outside that manifest.
