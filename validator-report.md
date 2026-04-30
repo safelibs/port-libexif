@@ -76,3 +76,32 @@ Final status:
 - Docker was available.
 - Validator checkout, unit tests, testcase inventory checks, package refresh, original baseline, local override baseline, and proof verification all ran.
 - The setup baseline is complete after the required post-commit package/lock/artifact refresh into `validator/artifacts/libexif-safe/**`.
+
+## Phase 2 Source API/ABI/Packaging Disposition
+
+Phase: `impl_02_fix_source_api_validator_failures`
+
+Source-class assignment result:
+- No source API, ABI, packaging, header, pkg-config, symbol, parser, object, table, MakerNote, or C-level validator failures were assigned to this phase.
+- Existing phase-1 local override results already show all five source cases passing: `compile-link-smoke`, `invalid-data-handling`, `jpeg-exif-c-api-parse`, `maker-note-handling`, and `tag-lookup-value-formatting`.
+- Because there were no source-class failures to fix, no new source regression test was added.
+
+Retest evidence before the phase-2 report commit:
+- `test ! -f safe/tests/validator_regressions.rs`: passed; the file is absent because this phase had no source-class fix.
+- `cargo test --manifest-path safe/Cargo.toml --release`: passed.
+- `bash safe/tests/run-cve-regressions.sh`: passed.
+- `bash safe/tests/run-original-test-suite.sh`: passed; `libfailmalloc` was unavailable, so the existing failmalloc subcheck was skipped by the harness.
+- `LIBEXIF_REQUIRE_REUSE=1 PACKAGE_BUILD_ROOT="$PWD/safe/.artifacts/impl_09_final_release" bash safe/tests/run-c-compile-smoke.sh`: passed.
+- `LIBEXIF_REQUIRE_REUSE=1 PACKAGE_BUILD_ROOT="$PWD/safe/.artifacts/impl_09_final_release" bash safe/tests/run-package-build.sh`: passed.
+- `jq -r 'select(.kind=="source") | [.testcase_id,.status,.port_commit,.override_debs_installed] | @tsv' validator/artifacts/libexif-safe/port/results/libexif/*.json`: all five source cases were `passed` with override packages installed.
+
+Validator matrix retest evidence:
+- `cd validator && bash test.sh --config repositories.yml --tests-root tests --artifact-root artifacts/libexif-safe-check02 --mode port --override-deb-root artifacts/debs/local --port-deb-lock artifacts/libexif-safe/proof/local-port-debs-lock.json --library libexif --record-casts`: completed.
+- `validator/artifacts/libexif-safe-check02/port/results/libexif/summary.json`: 135 cases, 5 source cases, 130 usage cases, 129 passed, 6 failed.
+- The five source cases `compile-link-smoke`, `invalid-data-handling`, `jpeg-exif-c-api-parse`, `maker-note-handling`, and `tag-lookup-value-formatting` all passed, all recorded override packages installed, and all recorded the phase commit as `port_commit`.
+- The six failed cases remain the Phase 3 usage failures listed in the baseline failure table; no source-class validator failure remains.
+
+Phase-2 conclusion:
+- No source changes were required.
+- Remaining baseline failures are the six ordinary CLI/metadata usage failures already assigned to Phase 3.
+- Post-commit package, override `.deb`, local lock, and `libexif-safe-check02` result provenance were refreshed to the phase-2 commit for verifier reuse checks.
