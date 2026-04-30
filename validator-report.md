@@ -152,3 +152,26 @@ Retest evidence before the phase-4 report commit:
 Phase-4 conclusion:
 - No implementation fix was required because no safety-class validator failure existed after the Phase 3 fixes.
 - Post-commit package, override `.deb`, local lock, and `libexif-safe-check04` result provenance must be refreshed to the phase-4 commit for verifier reuse checks.
+
+## Phase 5 Remaining Failures and Validator-Bug Disposition
+
+Phase: `impl_05_fix_remaining_or_validator_bugs`
+
+Remaining failure inventory:
+- `validator/artifacts/libexif-safe/port/results/libexif/summary.json`: old baseline artifact, 135 cases, 129 passed, 6 failed. The six failures are the Phase 3 debug-trace usage cases listed in the baseline failure table.
+- `validator/artifacts/libexif-safe-check02/port/results/libexif/summary.json`: old phase-2 artifact, 135 cases, 129 passed, 6 failed. The same six Phase 3 debug-trace usage cases remained before the Phase 3 fix.
+- `validator/artifacts/libexif-safe-check03/port/results/libexif/summary.json`: 135 cases, 5 source cases, 130 usage cases, 135 passed, 0 failed.
+- `validator/artifacts/libexif-safe-check04/port/results/libexif/summary.json`: latest completed validator artifact before this phase, 135 cases, 5 source cases, 130 usage cases, 135 passed, 0 failed.
+
+Disposition:
+- No validator testcase failure remains after the Phase 3 fix and Phase 4 confirmation run.
+- No additional `safe/` behavior fix was required in this phase.
+- No new regression test was added because there was no remaining legitimate libexif-safe failure class to cover.
+- No validator testcase skip or local validator patch was required.
+
+Validator bug waivers:
+- None. There is no remaining failing testcase requiring a waiver.
+
+Phase-5 conclusion:
+- The latest inspected validator matrix is clean, so this phase is a no-op for behavior.
+- The phase still refreshes package artifacts, copied override `.deb`s, and `validator/artifacts/libexif-safe/proof/local-port-debs-lock.json` after the phase commit so follow-on checks can assert provenance against the final parent `HEAD`.
