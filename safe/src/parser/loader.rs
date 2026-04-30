@@ -1,4 +1,4 @@
-use core::ffi::{c_char, c_uchar, c_uint};
+use core::ffi::{c_char, c_int, c_uchar, c_uint};
 use core::mem::size_of;
 use core::ptr;
 
@@ -12,6 +12,7 @@ use std::path::Path;
 use crate::ffi::panic_boundary;
 use crate::ffi::types::{
     ExifData, ExifLoader, ExifLog, ExifLong, ExifMem, EXIF_LOG_CODE_CORRUPT_DATA,
+    EXIF_LOG_CODE_DEBUG,
 };
 use crate::object::data::exif_data_new_mem_impl;
 use crate::parser::data_load::exif_data_load_data_impl;
@@ -35,6 +36,18 @@ const JPEG_MARKER_APP11: u8 = 0xeb;
 const JPEG_MARKER_APP13: u8 = 0xed;
 const JPEG_MARKER_APP14: u8 = 0xee;
 const JPEG_MARKER_COM: u8 = 0xfe;
+const LOG_DOMAIN_EXIF_LOADER: &[u8] = b"ExifLoader\0";
+const LOG_SCANNING: &[u8] = b"Scanning %i byte(s) of data...\0";
+
+unsafe extern "C" {
+    fn exif_log(
+        log: *mut ExifLog,
+        code: crate::ffi::types::ExifLogCode,
+        domain: *const c_char,
+        format: *const c_char,
+        ...
+    );
+}
 
 #[repr(u32)]
 #[derive(Clone, Copy, Eq, PartialEq)]
@@ -129,6 +142,19 @@ fn matches_known_exif_prefix(window: &[u8], start: usize) -> bool {
     compare_len == 0 || window[start..start + compare_len] == EXIF_HEADER[..compare_len]
 }
 
+unsafe fn log_scanning(loader: *mut ExifLoader, len: c_uint) {
+    let log = unsafe { (*loader_private(loader)).log };
+    unsafe {
+        exif_log(
+            log,
+            EXIF_LOG_CODE_DEBUG,
+            LOG_DOMAIN_EXIF_LOADER.as_ptr().cast(),
+            LOG_SCANNING.as_ptr().cast(),
+            len as c_int,
+        );
+    }
+}
+
 pub(crate) unsafe fn exif_loader_write_impl(
     loader: *mut ExifLoader,
     mut buffer: *mut c_uchar,
@@ -169,6 +195,8 @@ pub(crate) unsafe fn exif_loader_write_impl(
         if len == 0 {
             return 1;
         }
+
+        unsafe { log_scanning(loader, len) };
 
         {
             let loader_ref = unsafe { &mut *loader_private(loader) };

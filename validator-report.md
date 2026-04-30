@@ -105,3 +105,27 @@ Phase-2 conclusion:
 - No source changes were required.
 - Remaining baseline failures are the six ordinary CLI/metadata usage failures already assigned to Phase 3.
 - Post-commit package, override `.deb`, local lock, and `libexif-safe-check02` result provenance were refreshed to the phase-2 commit for verifier reuse checks.
+
+## Phase 3 CLI Usage, Metadata Formatting, XML, Thumbnail, and Dependent-Client Disposition
+
+Phase: `impl_03_fix_cli_usage_metadata_failures`
+
+Usage-class assignment result:
+- The only usage-class failures assigned to this phase were the six debug-trace cases from the baseline and phase-2 retest: `usage-exif-cli-debug-loader-trace`, `usage-exif-cli-debug-ifd-gps-trace`, `usage-exif-cli-debug-machine-readable-combo`, `usage-exif-cli-debug-no-fixup-loader-trace`, `usage-exif-cli-remove-decrements-ifd-zero-entries`, and `usage-exif-cli-remove-missing-copyright`.
+- The value formatting, XML, machine-readable rows, thumbnail extraction, and remove/save behavior in the phase-2 logs were already correct for these six cases; each failure stopped on the missing upstream-style `exif_log` debug callbacks.
+
+Fix disposition:
+- Restored upstream-compatible `ExifLoader` scan logging through the configured loader log object, including the `ExifLoader: Scanning ...` callback used by the `exif --debug` usage cases.
+- Restored upstream-compatible `ExifData` load logging for EXIF header detection, IFD 0 offset discovery, raw IFD entry counts, and named entry loading, including the `Loading 9 entries...`, `Loading 8 entries...`, `Loading entry 0x10f ('Make')...`, and `Loading entry 0x110 ('Model')...` callbacks used by the debug and remove verification flows.
+- Added `safe/tests/validator_regressions.rs`, which compiles a small C client against the safe ABI and uses the validator canon fixture to assert the formatted log stream and the Make-removal raw IFD count transition covering all six testcase IDs.
+
+Retest evidence before the phase-3 report commit:
+- `cargo test --manifest-path safe/Cargo.toml --release validator_usage_debug_trace_callbacks_cover_cli_debug_failures -- --nocapture`: passed.
+- `cargo test --manifest-path safe/Cargo.toml --release`: passed.
+- `bash safe/tests/run-cve-regressions.sh`: passed.
+- `bash safe/tests/run-original-test-suite.sh`: passed; `libfailmalloc` was unavailable, so the existing failmalloc subcheck was skipped by the harness.
+
+Phase-3 conclusion:
+- The six assigned ordinary usage failures were a single missing debug-callback compatibility class, now covered by a direct local C ABI regression.
+- No malformed/crash/timeout/safety usage failures were assigned to this phase.
+- Post-commit package, override `.deb`, local lock, and `libexif-safe-check03` result provenance must be refreshed to the phase-3 commit for verifier reuse checks.

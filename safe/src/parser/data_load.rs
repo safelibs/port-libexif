@@ -1,17 +1,17 @@
-use core::ffi::{c_char, c_uchar, c_uint};
+use core::ffi::{c_char, c_int, c_uchar, c_uint};
 use core::ptr;
 use core::slice;
 
 use crate::ffi::panic_boundary;
 use crate::ffi::types::{
-    ExifByteOrder, ExifData, ExifEntry, ExifIfd, ExifLong, ExifTag, EXIF_BYTE_ORDER_INTEL,
+    ExifByteOrder, ExifData, ExifEntry, ExifIfd, ExifLog, ExifLong, ExifTag, EXIF_BYTE_ORDER_INTEL,
     EXIF_BYTE_ORDER_MOTOROLA, EXIF_IFD_0, EXIF_IFD_1, EXIF_IFD_COUNT, EXIF_IFD_EXIF, EXIF_IFD_GPS,
-    EXIF_IFD_INTEROPERABILITY,
+    EXIF_IFD_INTEROPERABILITY, EXIF_LOG_CODE_DEBUG,
 };
 use crate::object::content::{exif_content_add_entry_impl, exif_content_reserve_entries_impl};
 use crate::object::data::{
-    exif_data_fix_impl, exif_data_get_mem_impl, exif_data_get_options_impl, exif_data_reset_impl,
-    exif_data_set_byte_order_impl, exif_data_set_mnote_offset_impl,
+    exif_data_fix_impl, exif_data_get_log_impl, exif_data_get_mem_impl, exif_data_get_options_impl,
+    exif_data_reset_impl, exif_data_set_byte_order_impl, exif_data_set_mnote_offset_impl,
 };
 use crate::object::entry::{exif_entry_new_mem_impl, exif_entry_unref_impl};
 use crate::parser::limits::{
@@ -24,11 +24,20 @@ use crate::parser::loader::{
 };
 use crate::primitives::format::exif_format_get_size_impl;
 use crate::runtime::mem::{exif_mem_alloc_impl, exif_mem_free_impl};
-use crate::tables::tag_table::exif_tag_get_name_in_ifd;
+use crate::tables::tag_table::{exif_tag_get_name, exif_tag_get_name_in_ifd};
 
 const EXIF_HEADER: [u8; 6] = *b"Exif\0\0";
 const JPEG_MARKER_SOI: u8 = 0xd8;
 const JPEG_MARKER_APP1: u8 = 0xe1;
+const LOG_DOMAIN_EXIF_DATA: &[u8] = b"ExifData\0";
+const LOG_PARSING: &[u8] = b"Parsing %i byte(s) EXIF data...\n\0";
+const LOG_FOUND_HEADER_AT_START: &[u8] = b"Found EXIF header at start.\0";
+const LOG_DEAL_WITH_EXIF: &[u8] = b"We have to deal with %i byte(s) of EXIF data.\0";
+const LOG_FOUND_HEADER: &[u8] = b"Found EXIF header.\0";
+const LOG_IFD0_AT: &[u8] = b"IFD 0 at %i.\0";
+const LOG_LOADING_ENTRIES: &[u8] = b"Loading %hu entries...\0";
+const LOG_LOADING_ENTRY: &[u8] = b"Loading entry 0x%x ('%s')...\0";
+const UNKNOWN_TAG_NAME: &[u8] = b"Unknown\0";
 
 const EXIF_TAG_EXIF_IFD_POINTER: ExifTag = 0x8769;
 const EXIF_TAG_GPS_INFO_IFD_POINTER: ExifTag = 0x8825;
@@ -37,11 +46,27 @@ const EXIF_TAG_JPEG_INTERCHANGE_FORMAT: ExifTag = 0x0201;
 const EXIF_TAG_JPEG_INTERCHANGE_FORMAT_LENGTH: ExifTag = 0x0202;
 const EXIF_TAG_MAKER_NOTE: ExifTag = 0x927c;
 
+unsafe extern "C" {
+    fn exif_log(
+        log: *mut ExifLog,
+        code: crate::ffi::types::ExifLogCode,
+        domain: *const c_char,
+        format: *const c_char,
+        ...
+    );
+}
+
 struct LoadContext {
     data: *mut ExifData,
     order: ExifByteOrder,
     budget: ParseBudget,
     loaded_ifds: [bool; EXIF_IFD_COUNT as usize],
+}
+
+struct ResolvedExifPayload<'a> {
+    bytes: &'a [u8],
+    found_at_start: bool,
+    app1_len: Option<usize>,
 }
 
 impl LoadContext {
@@ -52,6 +77,59 @@ impl LoadContext {
             budget: ParseBudget::new(input_size),
             loaded_ifds: [false; EXIF_IFD_COUNT as usize],
         }
+    }
+}
+
+unsafe fn data_log_no_args(data: *mut ExifData, format: &[u8]) {
+    unsafe {
+        exif_log(
+            exif_data_get_log_impl(data),
+            EXIF_LOG_CODE_DEBUG,
+            LOG_DOMAIN_EXIF_DATA.as_ptr().cast(),
+            format.as_ptr().cast(),
+        );
+    }
+}
+
+unsafe fn data_log_i(data: *mut ExifData, format: &[u8], value: c_int) {
+    unsafe {
+        exif_log(
+            exif_data_get_log_impl(data),
+            EXIF_LOG_CODE_DEBUG,
+            LOG_DOMAIN_EXIF_DATA.as_ptr().cast(),
+            format.as_ptr().cast(),
+            value,
+        );
+    }
+}
+
+unsafe fn data_log_loading_entries(data: *mut ExifData, count: usize) {
+    unsafe {
+        exif_log(
+            exif_data_get_log_impl(data),
+            EXIF_LOG_CODE_DEBUG,
+            LOG_DOMAIN_EXIF_DATA.as_ptr().cast(),
+            LOG_LOADING_ENTRIES.as_ptr().cast(),
+            count as c_int,
+        );
+    }
+}
+
+unsafe fn data_log_loading_entry(data: *mut ExifData, tag: ExifTag) {
+    let mut name = exif_tag_get_name(tag);
+    if name.is_null() {
+        name = UNKNOWN_TAG_NAME.as_ptr().cast();
+    }
+
+    unsafe {
+        exif_log(
+            exif_data_get_log_impl(data),
+            EXIF_LOG_CODE_DEBUG,
+            LOG_DOMAIN_EXIF_DATA.as_ptr().cast(),
+            LOG_LOADING_ENTRY.as_ptr().cast(),
+            tag as c_uint,
+            name,
+        );
     }
 }
 
@@ -89,7 +167,7 @@ fn slice_range<'a>(
     bytes.get(offset..end).ok_or(ParseError::Corrupt(context))
 }
 
-fn resolve_exif_payload<'a>(source: &'a [u8]) -> Result<&'a [u8], ParseError> {
+fn resolve_exif_payload<'a>(source: &'a [u8]) -> Result<ResolvedExifPayload<'a>, ParseError> {
     if source.len() < EXIF_HEADER.len() {
         return Err(ParseError::Corrupt(
             "Size of data too small to allow for EXIF data",
@@ -97,7 +175,11 @@ fn resolve_exif_payload<'a>(source: &'a [u8]) -> Result<&'a [u8], ParseError> {
     }
 
     if source.starts_with(&EXIF_HEADER) {
-        return Ok(source);
+        return Ok(ResolvedExifPayload {
+            bytes: source,
+            found_at_start: true,
+            app1_len: None,
+        });
     }
 
     let mut offset = 0usize;
@@ -156,12 +238,17 @@ fn resolve_exif_payload<'a>(source: &'a [u8]) -> Result<&'a [u8], ParseError> {
     }
 
     offset += 2;
-    slice_range(
+    let payload = slice_range(
         source,
         offset,
         payload_len - 2,
         "EXIF APP1 payload extends past end of buffer",
-    )
+    )?;
+    Ok(ResolvedExifPayload {
+        bytes: payload,
+        found_at_start: false,
+        app1_len: Some(payload_len),
+    })
 }
 
 fn load_thumbnail(
@@ -208,6 +295,8 @@ fn load_entry(
     entry_offset: usize,
     tag: ExifTag,
 ) -> Result<Option<*mut ExifEntry>, ParseError> {
+    unsafe { data_log_loading_entry(ctx.data, tag) };
+
     let format = read_short(tiff, entry_offset + 2, ctx.order)? as i32;
     let components = read_long(tiff, entry_offset + 4, ctx.order)? as usize;
     let format_size = exif_format_get_size_impl(format) as usize;
@@ -286,6 +375,7 @@ fn parse_ifd(
     ctx.budget.record_offset(offset as u32)?;
 
     let declared_entries = read_short(tiff, offset, ctx.order)? as usize;
+    unsafe { data_log_loading_entries(ctx.data, declared_entries) };
     ctx.budget.charge_ifd(declared_entries)?;
 
     let entries_offset = checked_add(offset, 2, "IFD entry table overflow")?;
@@ -379,9 +469,19 @@ fn parse_ifd(
     Ok(())
 }
 
-fn parse_payload(data: *mut ExifData, payload: &[u8]) -> Result<(), ParseError> {
+fn parse_payload(
+    data: *mut ExifData,
+    payload: &[u8],
+    found_at_start: bool,
+) -> Result<(), ParseError> {
     if payload.len() < EXIF_HEADER.len() || !payload.starts_with(&EXIF_HEADER) {
         return Err(ParseError::Corrupt("EXIF header not found"));
+    }
+    unsafe {
+        if found_at_start {
+            data_log_no_args(data, LOG_FOUND_HEADER_AT_START);
+        }
+        data_log_no_args(data, LOG_FOUND_HEADER);
     }
     if payload.len() < 14 {
         return Err(ParseError::Corrupt(
@@ -406,6 +506,7 @@ fn parse_payload(data: *mut ExifData, payload: &[u8]) -> Result<(), ParseError> 
     }
 
     let ifd0_offset = read_long(payload, 10, order)? as usize;
+    unsafe { data_log_i(data, LOG_IFD0_AT, ifd0_offset as c_int) };
     let tiff = &payload[6..];
     let mut ctx = LoadContext::new(data, order, payload.len());
 
@@ -454,13 +555,17 @@ pub(crate) unsafe fn exif_data_load_data_impl(
     }
 
     let source = unsafe { slice::from_raw_parts(source, size as usize) };
+    unsafe { data_log_i(data, LOG_PARSING, size as c_int) };
     unsafe { exif_data_reset_impl(data) };
 
-    let payload = match resolve_exif_payload(source) {
-        Ok(payload) => payload,
+    let resolved = match resolve_exif_payload(source) {
+        Ok(resolved) => resolved,
         Err(_) => return,
     };
-    let _ = parse_payload(data, payload);
+    if let Some(app1_len) = resolved.app1_len {
+        unsafe { data_log_i(data, LOG_DEAL_WITH_EXIF, app1_len as c_int) };
+    }
+    let _ = parse_payload(data, resolved.bytes, resolved.found_at_start);
 }
 
 pub(crate) unsafe fn exif_data_new_from_file_impl(path: *const c_char) -> *mut ExifData {
