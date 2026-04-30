@@ -129,3 +129,26 @@ Phase-3 conclusion:
 - The six assigned ordinary usage failures were a single missing debug-callback compatibility class, now covered by a direct local C ABI regression.
 - No malformed/crash/timeout/safety usage failures were assigned to this phase.
 - Post-commit package, override `.deb`, local lock, and `libexif-safe-check03` result provenance must be refreshed to the phase-3 commit for verifier reuse checks.
+
+## Phase 4 Malformed Input, Crash, Timeout, and Memory-Safety Disposition
+
+Phase: `impl_04_fix_malformed_input_safety_failures`
+
+Safety-class assignment result:
+- No malformed input, crash, timeout, resource exhaustion, panic, no-EXIF error, MakerNote safety, or memory-safety validator failures were assigned to this phase in the failure table.
+- The phase-3 validator rerun already showed all 135 libexif cases passing, so there was no failing malformed/crash/timeout/safety result JSON to reproduce.
+- Because there was no safety-class failure to fix, no parser, object, MakerNote, runtime, or malformed-input regression test change was made in this phase.
+
+Retest evidence before the phase-4 report commit:
+- `cargo test --manifest-path safe/Cargo.toml --test cve_regressions -- --test-threads=1`: passed.
+- `test ! -f safe/tests/validator_regressions.rs || cargo test --manifest-path safe/Cargo.toml --test validator_regressions -- --test-threads=1`: passed.
+- `cargo test --manifest-path safe/Cargo.toml --release`: passed.
+- `bash safe/tests/run-cve-regressions.sh`: passed.
+- `cd validator && bash test.sh --config repositories.yml --tests-root tests --artifact-root artifacts/libexif-safe-check04 --mode port --override-deb-root artifacts/debs/local --port-deb-lock artifacts/libexif-safe/proof/local-port-debs-lock.json --library libexif --record-casts`: completed.
+- `validator/artifacts/libexif-safe-check04/port/results/libexif/summary.json`: 135 cases, 5 source cases, 130 usage cases, 135 passed, 0 failed.
+- The safety failure query over `validator/artifacts/libexif-safe-check04/port/results/libexif/*.json` returned no testcase IDs for failed results matching `invalid`, `truncated`, `corrupt`, `malformed`, `timeout`, `crash`, `maker-note`, `no-exif-error`, `timed out`, `panic`, or `segmentation`.
+- Every check04 result JSON recorded override packages installed and pre-report parent commit `3111a32e3b3e1a072c61db2b3c41df658ffa6930` as `port_commit`.
+
+Phase-4 conclusion:
+- No implementation fix was required because no safety-class validator failure existed after the Phase 3 fixes.
+- Post-commit package, override `.deb`, local lock, and `libexif-safe-check04` result provenance must be refreshed to the phase-4 commit for verifier reuse checks.
