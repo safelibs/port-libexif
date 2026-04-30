@@ -175,3 +175,72 @@ Validator bug waivers:
 Phase-5 conclusion:
 - The latest inspected validator matrix is clean, so this phase is a no-op for behavior.
 - The phase still refreshes package artifacts, copied override `.deb`s, and `validator/artifacts/libexif-safe/proof/local-port-debs-lock.json` after the phase commit so follow-on checks can assert provenance against the final parent `HEAD`.
+
+## Phase 6 Final Validator Run, Proof, Site, and Report
+
+Phase: `impl_06_final_validator_report`
+
+Validator commit:
+- `5d908be26e33f071e119ffe1a52e3149f1e5ec4e`
+- The existing validator checkout was reused in place. No validator fetch, pull, reclone, `make fetch-port-debs`, or direct library-path mode was used.
+
+Safe fix commits:
+- `3111a32` `Fix libexif CLI debug trace callbacks`: restored upstream-compatible `ExifLoader` and `ExifData` debug callbacks and added `safe/tests/validator_regressions.rs`.
+- `7f06197`, `5c9d338`, and `0ec0a73`: source-class, safety-class, and remaining-failure disposition/report commits; no additional behavior fix was required after the Phase 3 fix.
+- This final phase made no `safe/` source changes.
+
+Package artifacts:
+- Candidate package root: `safe/.artifacts/impl_09_final_release`
+- Candidate parent commit before this report commit: `0ec0a736277e64ad37abd4aba705a50102327032`
+- Candidate override root: `validator/artifacts/debs/local/libexif/`
+- Candidate lock: `validator/artifacts/libexif-safe/proof/local-port-debs-lock.json`
+- `libexif12_0.6.24-1safelibs1_amd64.deb`, architecture `amd64`, SHA256 `296e2bff12fdf84d365c29d03655ee65dfc7dc8ff87a1af2d10df9d2d5b3a5c8`, size `618126`
+- `libexif-dev_0.6.24-1safelibs1_amd64.deb`, architecture `amd64`, SHA256 `37eee6224a566422f24f7fdf5db9ba1081d288303340a82488b4f1c2973c91e6`, size `3568860`
+- After this report commit, `safe/.artifacts/impl_09_final_release`, copied override `.deb`s, and `validator/artifacts/libexif-safe/proof/local-port-debs-lock.json` are regenerated for the report commit `HEAD`; the post-commit proof records the authoritative package SHA256 values and `port_commit`.
+
+Original baseline summary:
+- Artifact root: `validator/artifacts/libexif-original`
+- Summary: 135 cases, 5 source cases, 130 usage cases, 135 passed, 0 failed, 135 casts.
+
+Checks executed:
+- `PACKAGE_BUILD_ROOT="$PWD/safe/.artifacts/impl_09_final_release" bash safe/tests/run-package-build.sh`
+- Re-copied canonical `libexif12` and `libexif-dev` `.deb`s from `safe/.artifacts/impl_09_final_release/artifacts/` into `validator/artifacts/debs/local/libexif/`.
+- Regenerated `validator/artifacts/libexif-safe/proof/local-port-debs-lock.json` with schema `1`, mode `port`, canonical package order, fixed `generated_at`, and candidate parent commit `0ec0a736277e64ad37abd4aba705a50102327032`.
+- `cargo test --manifest-path safe/Cargo.toml --release`
+- `bash safe/tests/run-cve-regressions.sh`
+- `bash safe/tests/run-original-test-suite.sh`
+- `LIBEXIF_REQUIRE_REUSE=1 PACKAGE_BUILD_ROOT="$PWD/safe/.artifacts/impl_09_final_release" bash safe/tests/run-c-compile-smoke.sh`
+- `LIBEXIF_REQUIRE_REUSE=1 PACKAGE_BUILD_ROOT="$PWD/safe/.artifacts/impl_09_final_release" bash safe/tests/run-export-compare.sh`
+- `LIBEXIF_REQUIRE_REUSE=1 PACKAGE_BUILD_ROOT="$PWD/safe/.artifacts/impl_09_final_release" bash safe/tests/run-package-build.sh`
+- `cd validator && python3 tools/testcases.py --config repositories.yml --tests-root tests --library libexif --check --min-source-cases 5 --min-usage-cases 130 --min-cases 135`
+- `cd validator && bash test.sh --config repositories.yml --tests-root tests --artifact-root artifacts/libexif-safe-final-candidate --mode port --override-deb-root artifacts/debs/local --port-deb-lock artifacts/libexif-safe/proof/local-port-debs-lock.json --library libexif --record-casts`
+- `cd validator && jq -e '.failed == 0 and .passed == .cases and .source_cases >= 5 and .usage_cases >= 130' artifacts/libexif-safe-final-candidate/port/results/libexif/summary.json`
+- `cd validator && python3 tools/verify_proof_artifacts.py --config repositories.yml --tests-root tests --artifact-root artifacts/libexif-safe-final-candidate --proof-output artifacts/libexif-safe-final-candidate/proof/libexif-safe-validation-proof.json --mode port --library libexif --require-casts --min-source-cases 5 --min-usage-cases 130 --min-cases 135`
+- Candidate per-result checks confirmed no mismatched `port_commit` values and no missing `override_debs_installed` markers.
+
+Candidate validator result:
+- Artifact root: `validator/artifacts/libexif-safe-final-candidate`
+- Proof: `validator/artifacts/libexif-safe-final-candidate/proof/libexif-safe-validation-proof.json`
+- Result: 135 cases, 5 source cases, 130 usage cases, 135 passed, 0 failed, 135 casts.
+- Candidate proof `port_commit`: `0ec0a736277e64ad37abd4aba705a50102327032`
+
+Failures found:
+- None in the Phase 6 candidate final matrix.
+- Historical failures were the six Phase 1/2 `exif --debug` usage cases; all are passing after the Phase 3 debug-callback fix.
+
+Fixes applied:
+- None in this phase.
+- Prior fix: Phase 3 restored loader/data debug logging compatibility and added validator-derived regression coverage.
+
+Validator bug waivers:
+- No validator testcase is skipped, waived, or expected-failing. The libexif `port` matrix and proof remain unmodified and must pass all 135 cases.
+- A validator site-rendering bug is waived with a narrow local source patch in the nested validator checkout: `validator/tools/render_site.py` renders `local:` port repositories as `local repository` instead of emitting the full local filesystem repository path into user-facing HTML.
+- Reason: this phase is required to keep the lock repository as `local:/home/yans/safelibs/pipeline/ports/port-libexif/safe`, but clean validator commit `5d908be26e33f071e119ffe1a52e3149f1e5ec4e` renders that string into the library provenance page. `scripts/verify-site.sh` then rejects the rendered HTML because it contains final user-facing `safe`/`unsafe` language outside testcase rows. The local patch changes only presentation of `local:` repository provenance; it does not alter testcase execution, result JSON, proof construction, copied evidence, or proof totals.
+- Expected validator checkout status for this final phase: `git -C validator status --short` reports `M tools/render_site.py` until the upstream validator renderer handles local repository display without tripping its own site-language check.
+
+Final clean run:
+- The authoritative post-report validator artifact root is `validator/artifacts/libexif-safe-final`.
+- The authoritative post-report proof path is `validator/artifacts/libexif-safe-final/proof/libexif-safe-validation-proof.json`.
+- The authoritative rendered review site path is `validator/artifacts/libexif-safe-final-site`.
+- Immediately after this report commit, the package root, local override `.deb`s, and lock are refreshed for the report commit `HEAD`; stale final artifacts are removed; the full `port` matrix, summary assertion, proof verifier, site renderer, and site verifier are rerun against `validator/artifacts/libexif-safe-final`.
+- Final success requires the post-commit summary to report 135 cases, at least 5 source cases, at least 130 usage cases, 135 passed, 0 failed, and the proof library entry for `libexif` to record `port_commit` equal to the report commit `HEAD`.
