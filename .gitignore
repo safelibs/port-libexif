@@ -6,6 +6,9 @@
 /build/
 /dist/
 /release-artifacts/
+/validator/
+/safe/.artifacts/
+/safe/target/
 *.deb
 *.ddeb
 *.dsc
